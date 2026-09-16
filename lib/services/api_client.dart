@@ -18,7 +18,7 @@ class SmartFileApi {
   SmartFileApi({String? baseUrl})
       : baseUrl = baseUrl ??
             (Platform.isAndroid
-                ? 'http://10.0.2.2:4000'
+                ? 'http://127.0.0.1:4000'
                 : 'http://127.0.0.1:4000');
 
   String baseUrl;
@@ -276,6 +276,17 @@ class SmartFileApi {
     return _get('/api/mobile/bootstrap');
   }
 
+  Future<bool> checkHealth() async {
+    try {
+      final response = await http
+          .get(_uri('/api/health'))
+          .timeout(const Duration(seconds: 4));
+      return response.statusCode >= 200 && response.statusCode < 300;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<Map<String, dynamic>> _get(String path) async {
     if (token == null) {
       throw ApiException('Sign in before loading your account.');
@@ -283,7 +294,7 @@ class SmartFileApi {
     try {
       final response = await http
           .get(_uri(path), headers: _headers)
-          .timeout(const Duration(seconds: 15));
+          .timeout(const Duration(seconds: 10));
       final decoded = response.body.isEmpty
           ? <String, dynamic>{}
           : jsonDecode(response.body);
@@ -302,15 +313,15 @@ class SmartFileApi {
       return body;
     } on SocketException {
       throw ApiException(
-        'Cannot reach the backend. Check the server address in Settings.',
+        'Cannot reach backend at $baseUrl. If using USB, ensure adb reverse is running or use Wi-Fi IP.',
       );
     } on http.ClientException {
       throw ApiException(
-        'Cannot reach the backend. Check that the backend is running and the server address is correct.',
+        'Cannot reach backend at $baseUrl. Check that server is running and address is reachable.',
       );
     } on TimeoutException {
       throw ApiException(
-        'The backend took too long to respond. Check that it is running and reachable.',
+        'The backend at $baseUrl took too long to respond. Check server connection.',
       );
     } on HttpException {
       throw ApiException('The backend connection was interrupted.');
@@ -330,7 +341,7 @@ class SmartFileApi {
     try {
       final response = await http
           .post(_uri(path), headers: _headers, body: jsonEncode(payload))
-          .timeout(const Duration(seconds: 30));
+          .timeout(const Duration(seconds: 10));
       final decoded = response.body.isEmpty
           ? <String, dynamic>{}
           : jsonDecode(response.body);
@@ -349,15 +360,15 @@ class SmartFileApi {
       return body;
     } on SocketException {
       throw ApiException(
-        'Cannot reach the backend. Check the server address in Settings.',
+        'Cannot reach backend at $baseUrl. If using USB, ensure adb reverse is running or use Wi-Fi IP.',
       );
     } on http.ClientException {
       throw ApiException(
-        'Cannot reach the backend. Check that the backend is running and the server address is correct.',
+        'Cannot reach backend at $baseUrl. Check that server is running and address is reachable.',
       );
     } on TimeoutException {
       throw ApiException(
-        'The backend took too long to respond. Check that it is running and reachable.',
+        'The backend at $baseUrl took too long to respond. Check server connection.',
       );
     } on HttpException {
       throw ApiException('The backend connection was interrupted.');

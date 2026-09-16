@@ -316,32 +316,55 @@ class _AuthScreenState extends State<AuthScreen> {
                         if (_errorMessage != null) ...[
                           const SizedBox(height: 14),
                           Container(
-                            padding: const EdgeInsets.all(12),
+                            padding: const EdgeInsets.all(14),
                             decoration: BoxDecoration(
                               color: const Color(0xFFEF4444).withValues(alpha: 0.1),
-                              borderRadius: BorderRadius.circular(12),
+                              borderRadius: BorderRadius.circular(14),
                               border: Border.all(
                                 color: const Color(0xFFEF4444).withValues(alpha: 0.3),
                               ),
                             ),
-                            child: Row(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Icon(
-                                  Icons.error_outline,
-                                  color: Color(0xFFEF4444),
-                                  size: 20,
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: Text(
-                                    _errorMessage!,
-                                    style: const TextStyle(
+                                Row(
+                                  children: [
+                                    const Icon(
+                                      Icons.error_outline,
                                       color: Color(0xFFEF4444),
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w500,
+                                      size: 20,
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Text(
+                                        _errorMessage!,
+                                        style: const TextStyle(
+                                          color: Color(0xFFEF4444),
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                if (_isRegister &&
+                                    (_errorMessage!.contains('already exists') ||
+                                        _errorMessage!.contains('taken') ||
+                                        _errorMessage!.contains('409'))) ...[
+                                  const SizedBox(height: 8),
+                                  TextButton.icon(
+                                    onPressed: () => setState(() {
+                                      _isRegister = false;
+                                      _errorMessage = null;
+                                    }),
+                                    icon: const Icon(Icons.login, size: 16),
+                                    label: const Text('Switch to Sign In'),
+                                    style: TextButton.styleFrom(
+                                      foregroundColor: const Color(0xFF6046E8),
+                                      padding: EdgeInsets.zero,
                                     ),
                                   ),
-                                ),
+                                ],
                               ],
                             ),
                           ),
@@ -464,22 +487,87 @@ class _AuthScreenState extends State<AuthScreen> {
                             ),
                           ),
                           const SizedBox(height: 10),
-                          FilledButton.tonal(
-                            onPressed: () {
-                              setState(() {
-                                widget.api.baseUrl =
-                                    _serverUrlController.text.trim();
-                                _showServerConfig = false;
-                              });
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    'Server URL updated to ${widget.api.baseUrl}',
-                                  ),
+                          // Quick preset buttons
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 6,
+                            children: [
+                              ActionChip(
+                                label: const Text('127.0.0.1:4000 (ADB/USB)',
+                                    style: TextStyle(fontSize: 11)),
+                                onPressed: () {
+                                  _serverUrlController.text =
+                                      'http://127.0.0.1:4000';
+                                },
+                              ),
+                              ActionChip(
+                                label: const Text('192.168.1.158:4000 (Wi-Fi)',
+                                    style: TextStyle(fontSize: 11)),
+                                onPressed: () {
+                                  _serverUrlController.text =
+                                      'http://192.168.1.158:4000';
+                                },
+                              ),
+                              ActionChip(
+                                label: const Text('10.0.2.2:4000 (Emulator)',
+                                    style: TextStyle(fontSize: 11)),
+                                onPressed: () {
+                                  _serverUrlController.text =
+                                      'http://10.0.2.2:4000';
+                                },
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: OutlinedButton(
+                                  onPressed: () async {
+                                    final testUrl =
+                                        _serverUrlController.text.trim();
+                                    widget.api.baseUrl = testUrl;
+                                    final ok = await widget.api.checkHealth();
+                                    if (context.mounted) {
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(
+                                        SnackBar(
+                                          content: Text(
+                                            ok
+                                                ? 'Connected! Backend is healthy.'
+                                                : 'Cannot reach $testUrl. Check that backend is running and adb reverse tcp:4000 tcp:4000 was executed.',
+                                          ),
+                                          backgroundColor: ok
+                                              ? const Color(0xFF10B981)
+                                              : const Color(0xFFEF4444),
+                                        ),
+                                      );
+                                    }
+                                  },
+                                  child: const Text('Test Connection'),
                                 ),
-                              );
-                            },
-                            child: const Text('Apply Server URL'),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: FilledButton(
+                                  onPressed: () {
+                                    setState(() {
+                                      widget.api.baseUrl =
+                                          _serverUrlController.text.trim();
+                                      _showServerConfig = false;
+                                    });
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(
+                                          'Server URL set to ${widget.api.baseUrl}',
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                  child: const Text('Save URL'),
+                                ),
+                              ),
+                            ],
                           ),
                         ],
                       ),
