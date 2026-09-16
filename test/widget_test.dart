@@ -16,9 +16,9 @@ void main() {
     await tester.tap(find.text('Explore Demo Mode (Instant)'));
     await tester.pumpAndSettle();
 
-    // Verify MainShell is now loaded
+    // Verify MainShell is now loaded with live storage card
     expect(find.text('Files'), findsOneWidget);
-    expect(find.text('118.2 GB used'), findsOneWidget);
+    expect(find.text('Authorize Device Folder'), findsOneWidget);
     expect(find.text('AI Chat'), findsOneWidget);
     expect(find.text('Browse'), findsOneWidget);
     expect(find.text('Search'), findsOneWidget);
@@ -28,15 +28,12 @@ void main() {
     await tester.tap(find.text('AI Chat'));
     await tester.pumpAndSettle();
     expect(find.text('AI Assistant'), findsOneWidget);
-    expect(find.text('Found 14 PDFs in Downloads. Here\'s my plan:'),
-        findsOneWidget);
-    expect(find.text('Confirm'), findsOneWidget);
+    expect(find.textContaining('FileMind AI'), findsWidgets);
 
     // Navigate to Browse tab
     await tester.tap(find.text('Browse'));
     await tester.pumpAndSettle();
     expect(find.text('Documents'), findsWidgets);
     expect(find.text('Photos'), findsWidgets);
-    expect(find.text('Videos'), findsWidgets);
   });
 }

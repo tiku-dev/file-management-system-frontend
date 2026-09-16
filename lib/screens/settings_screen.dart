@@ -1,17 +1,21 @@
 import 'package:flutter/material.dart';
 
 import '../services/api_client.dart';
+import '../services/local_file_service.dart';
+import '../widgets/folder_picker_sheet.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
     super.key,
     required this.api,
+    required this.fileService,
     required this.isDark,
     required this.onThemeModeChanged,
     required this.onLogout,
   });
 
   final SmartFileApi api;
+  final LocalFileService fileService;
   final bool isDark;
   final ValueChanged<bool> onThemeModeChanged;
   final VoidCallback onLogout;
@@ -108,14 +112,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         icon: Icons.folder_shared_outlined,
                         iconBg: const Color(0xFFF59E0B).withValues(alpha: 0.12),
                         iconColor: const Color(0xFFF59E0B),
-                        title: 'Allowed paths',
-                        subtitle: 'Documents · Downloads · DCIM',
-                        onTap: () {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Allowed paths: Documents, Downloads, DCIM'),
-                            ),
-                          );
+                        title: 'Authorized Folder',
+                        subtitle: widget.fileService.isAuthorized
+                            ? '${widget.fileService.authorizedFolderName} (${widget.fileService.totalFilesCount} files)\n${widget.fileService.authorizedPath}'
+                            : 'No folder selected · Tap to authorize',
+                        onTap: () async {
+                          await showDeviceFolderPicker(context, widget.fileService);
+                          if (mounted) setState(() {});
                         },
                         isDark: isDark,
                       ),

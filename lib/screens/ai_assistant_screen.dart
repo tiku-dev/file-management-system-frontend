@@ -4,6 +4,7 @@ import '../models.dart';
 import '../services/api_client.dart';
 import '../services/local_file_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/folder_picker_sheet.dart';
 
 class AiAssistantScreen extends StatefulWidget {
   const AiAssistantScreen({
@@ -35,76 +36,19 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
   }
 
   void _initChatHistory() {
-    // Initial conversation matching Screen 4
-    final now = DateTime.now();
-    _messages.addAll([
+    final isAuth = widget.fileService.isAuthorized;
+    final folder = widget.fileService.authorizedFolderName;
+    final count = widget.fileService.totalFilesCount;
+
+    _messages.add(
       ChatMessage(
-        text:
-            'Move all PDFs from Downloads to Documents and rename them with today\'s date.',
-        isUser: true,
-        time: now.subtract(const Duration(minutes: 2)),
-      ),
-      ChatMessage(
-        text: "Found 14 PDFs in Downloads. Here's my plan:",
+        text: isAuth
+            ? "Hello! I am FileMind AI. I'm connected to your device folder: $folder ($count files). You can ask me to organize files by category, clean up duplicates, rename files, or create folders."
+            : "Hello! I am FileMind AI. Please authorize a folder on your device so I can help manage, organize, and rename your files.",
         isUser: false,
-        time: now.subtract(const Duration(minutes: 1)),
-        plan: const AiPlan(
-          reply: "Found 14 PDFs in Downloads. Here's my plan:",
-          operations: [
-            PlannedOperation(
-              id: 'op-1',
-              name: 'move_file',
-              input: {
-                'sourcePath': '/Downloads',
-                'destinationPath': '/Documents',
-              },
-              requiresApproval: true,
-            ),
-            PlannedOperation(
-              id: 'op-2',
-              name: 'rename_file',
-              input: {
-                'path': '/Documents/*.pdf',
-                'newName': '2026-09-08_*',
-              },
-              requiresApproval: true,
-            ),
-            PlannedOperation(
-              id: 'op-3',
-              name: 'delete_item',
-              input: {'path': '/Downloads/Archives'},
-              requiresApproval: true,
-            ),
-          ],
-          steps: [
-            AiPlanStep(
-              stepNumber: 1,
-              title: 'Move 14 files → Documents',
-              description: 'Downloads to Documents',
-              badgeText: 'Step 1',
-            ),
-            AiPlanStep(
-              stepNumber: 2,
-              title: 'Rename → prefix "2026-09-08_*"',
-              description: 'Date prefix formatting',
-              badgeText: 'Step 2',
-            ),
-            AiPlanStep(
-              stepNumber: 3,
-              title: 'Archive original folder to Trash',
-              description: 'Cleanup residual folder',
-              badgeText: 'Step 3',
-              isDestructive: true,
-            ),
-          ],
-          affectedCount: 14,
-          sourcePath: '/Downloads',
-          destinationPath: '/Documents',
-          estimatedSeconds: 6,
-          previewFiles: ['Invoice-Mar.pdf', 'Contract.pdf'],
-        ),
+        time: DateTime.now(),
       ),
-    ]);
+    );
   }
 
   @override
@@ -131,7 +75,33 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
     _scrollToBottom();
 
     try {
-      final plan = await widget.api.plan(text, const []);
+      String prompt = text;
+      if (widget.fileService.isAuthorized) {
+        final allFiles = widget.fileService.allEntries
+            .where((f) => f.kind == FileEntryKind.file)
+            .toList();
+        final photos = allFiles
+            .where((f) => f.category == FileCategory.photos)
+            .map((f) => f.name)
+            .take(30)
+            .toList();
+        final docs = allFiles
+            .where((f) => f.category == FileCategory.documents)
+            .map((f) => f.name)
+            .take(30)
+            .toList();
+        final sample = allFiles.take(25).map((f) => f.name).join(', ');
+
+        final buf = StringBuffer();
+        buf.writeln('Target folder: "${widget.fileService.authorizedPath}"');
+        buf.writeln('Total files: ${allFiles.length}');
+        if (photos.isNotEmpty) buf.writeln('Image files: ${photos.join(', ')}');
+        if (docs.isNotEmpty) buf.writeln('Doc files: ${docs.join(', ')}');
+        buf.writeln('Sample files: $sample');
+        buf.writeln('Instruction: $text');
+        prompt = buf.toString();
+      }
+      final plan = await widget.api.plan(prompt, const []);
       if (!mounted) return;
 
       setState(() {
@@ -146,7 +116,7 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
       if (!mounted) return;
       setState(() {
         _messages.add(ChatMessage(
-          text: 'I ran into an issue connecting to Groq AI: $e',
+          text: 'Notice: $e',
           isUser: false,
           time: DateTime.now(),
         ));
@@ -179,120 +149,208 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final cardColor = Theme.of(context).cardColor;
-    final outlineColor = Theme.of(context).colorScheme.outline;
+    return ListenableBuilder(
+      listenable: widget.fileService,
+      builder: (context, _) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        final cardColor = Theme.of(context).cardColor;
+        final outlineColor = Theme.of(context).colorScheme.outline;
+        final isAuthorized = widget.fileService.isAuthorized;
 
-    return Scaffold(
-      body: SafeArea(
-        child: Column(
-          children: [
-            // Top App Bar
-            Padding(
-              padding: const EdgeInsets.fromLTRB(8, 8, 16, 8),
-              child: Row(
-                children: [
-                  if (widget.onBack != null)
-                    IconButton(
-                      icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
-                      onPressed: widget.onBack,
-                    )
-                  else
-                    const SizedBox(width: 8),
-                  Text(
-                    'AI Assistant',
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.w700,
-                      color: isDark ? Colors.white : const Color(0xFF111827),
-                    ),
-                  ),
-                  const Spacer(),
-                  IconButton(
-                    icon: const Icon(Icons.cleaning_services_outlined, size: 22),
-                    tooltip: 'Clear Chat',
-                    onPressed: _clearChat,
-                  ),
-                ],
-              ),
-            ),
-
-            // Profile Header Card (FileMind AI Online)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                decoration: BoxDecoration(
-                  color: cardColor,
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(
-                    color: outlineColor.withValues(alpha: 0.6),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    // Purple circle with star
-                    Container(
-                      width: 44,
-                      height: 44,
-                      decoration: const BoxDecoration(
-                        gradient: AppColors.storageGradient,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Center(
-                        child: Icon(
-                          Icons.star_rounded,
-                          color: Colors.white,
-                          size: 24,
+        return Scaffold(
+          body: SafeArea(
+            child: Column(
+              children: [
+                // Top App Bar
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 8, 16, 8),
+                  child: Row(
+                    children: [
+                      if (widget.onBack != null)
+                        IconButton(
+                          icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
+                          onPressed: widget.onBack,
+                        )
+                      else
+                        const SizedBox(width: 8),
+                      Text(
+                        'AI Assistant',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
+                          color: isDark ? Colors.white : const Color(0xFF111827),
                         ),
                       ),
+                      const Spacer(),
+                      IconButton(
+                        icon: const Icon(Icons.cleaning_services_outlined, size: 22),
+                        tooltip: 'Clear Chat',
+                        onPressed: _clearChat,
+                      ),
+                    ],
+                  ),
+                ),
+
+                // Profile Header Card (FileMind AI Online)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: cardColor,
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(
+                        color: outlineColor.withValues(alpha: 0.6),
+                      ),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'FileMind AI',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w700,
-                              color: isDark ? Colors.white : const Color(0xFF111827),
+                    child: Row(
+                      children: [
+                        // Purple circle with star
+                        Container(
+                          width: 44,
+                          height: 44,
+                          decoration: const BoxDecoration(
+                            gradient: AppColors.storageGradient,
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Center(
+                            child: Icon(
+                              Icons.star_rounded,
+                              color: Colors.white,
+                              size: 24,
                             ),
                           ),
-                          const SizedBox(height: 2),
-                          Row(
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Container(
-                                width: 7,
-                                height: 7,
-                                decoration: const BoxDecoration(
-                                  color: Color(0xFF10B981),
-                                  shape: BoxShape.circle,
+                              Text(
+                                'FileMind AI',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                  color: isDark ? Colors.white : const Color(0xFF111827),
                                 ),
                               ),
-                              const SizedBox(width: 6),
-                              const Text(
-                                'Online · Groq LLaMA 3.3',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Color(0xFF10B981),
-                                  fontWeight: FontWeight.w600,
-                                ),
+                              const SizedBox(height: 2),
+                              Row(
+                                children: [
+                                  Container(
+                                    width: 7,
+                                    height: 7,
+                                    decoration: const BoxDecoration(
+                                      color: Color(0xFF10B981),
+                                      shape: BoxShape.circle,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Expanded(
+                                    child: Text(
+                                      isAuthorized
+                                          ? 'Online · ${widget.fileService.authorizedFolderName} (${widget.fileService.totalFilesCount} files)'
+                                          : 'Online · Groq LLaMA 3.3',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        color: Color(0xFF10B981),
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ),
                             ],
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.more_horiz),
+                          color: isDark ? Colors.white60 : Colors.black45,
+                          onPressed: () => showDeviceFolderPicker(context, widget.fileService),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
+                // Connected Folder Banner
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+                  child: GestureDetector(
+                    onTap: () => showDeviceFolderPicker(context, widget.fileService),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: isAuthorized
+                            ? const Color(0xFF6046E8).withValues(alpha: 0.1)
+                            : Colors.amber.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: isAuthorized
+                              ? const Color(0xFF6046E8).withValues(alpha: 0.3)
+                              : Colors.amber.withValues(alpha: 0.4),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            isAuthorized ? Icons.folder_special : Icons.folder_off_outlined,
+                            color: isAuthorized ? const Color(0xFF6046E8) : Colors.amber.shade800,
+                            size: 20,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  isAuthorized
+                                      ? 'Connected: ${widget.fileService.authorizedFolderName}'
+                                      : 'No Device Folder Connected',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                    color: isAuthorized
+                                        ? (isDark ? Colors.white : const Color(0xFF1E1B38))
+                                        : Colors.amber.shade900,
+                                  ),
+                                ),
+                                Text(
+                                  isAuthorized
+                                      ? '${widget.fileService.totalFilesCount} files · ${widget.fileService.authorizedPath}'
+                                      : 'Tap here to authorize a folder for AI file management',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: isDark ? Colors.white60 : const Color(0xFF4B5563),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF6046E8),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              isAuthorized ? 'Change' : 'Authorize',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
                           ),
                         ],
                       ),
                     ),
-                    Icon(
-                      Icons.more_horiz,
-                      color: isDark ? Colors.white60 : Colors.black45,
-                    ),
-                  ],
+                  ),
                 ),
-              ),
-            ),
 
             // Subtitle banner card
             Padding(
@@ -373,6 +431,8 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
           ],
         ),
       ),
+    );
+      },
     );
   }
 
@@ -698,26 +758,83 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
         plan: plan,
         onRunPlan: () async {
           Navigator.pop(ctx);
-          // Execute the operations via local file service
+          int executedCount = 0;
           for (final op in plan.operations) {
-            if (op.name == 'move_file') {
-              final src = op.input['sourcePath'] as String? ?? '/Downloads';
-              final dst = op.input['destinationPath'] as String? ?? '/Documents';
-              await widget.fileService.move(src, dst);
+            try {
+              switch (op.name) {
+                case 'move_file':
+                  final src = op.input['sourcePath'] as String? ?? op.input['path'] as String?;
+                  final dst = op.input['destinationPath'] as String? ?? op.input['destination'] as String?;
+                  if (src != null && dst != null) {
+                    await widget.fileService.move(src, dst);
+                    executedCount++;
+                  }
+                  break;
+                case 'create_folder':
+                  final path = op.input['path'] as String? ?? op.input['name'] as String?;
+                  if (path != null) {
+                    await widget.fileService.createFolder('.', path);
+                    executedCount++;
+                  }
+                  break;
+                case 'create_file':
+                  final path = op.input['path'] as String? ?? op.input['name'] as String?;
+                  final content = op.input['content'] as String? ?? '';
+                  if (path != null) {
+                    await widget.fileService.createFile(path, content);
+                    executedCount++;
+                  }
+                  break;
+                case 'rename_file':
+                  final path = op.input['path'] as String?;
+                  final newName = op.input['newName'] as String?;
+                  if (path != null && newName != null) {
+                    await widget.fileService.rename(path, newName);
+                    executedCount++;
+                  }
+                  break;
+                case 'delete_file':
+                case 'delete_item':
+                  final path = op.input['path'] as String?;
+                  if (path != null) {
+                    await widget.fileService.delete(path);
+                    executedCount++;
+                  }
+                  break;
+                case 'edit_file':
+                  final path = op.input['path'] as String?;
+                  final content = op.input['content'] as String? ?? '';
+                  if (path != null) {
+                    await widget.fileService.editFile(path, content);
+                    executedCount++;
+                  }
+                  break;
+                case 'organize_files':
+                  final src = op.input['sourceDirectory'] as String? ?? '.';
+                  final strategy = op.input['strategy'] as String? ?? 'by_type';
+                  await widget.fileService.organizeFiles(src, strategy);
+                  executedCount++;
+                  break;
+              }
+            } catch (e) {
+              debugPrint('Error executing operation ${op.name}: $e');
             }
           }
+
+          await widget.fileService.refresh();
+
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text(
-                  'Plan executed successfully! ${plan.affectedCount} files organized.',
+                  'Plan executed successfully! $executedCount operations completed on device.',
                 ),
                 backgroundColor: const Color(0xFF10B981),
               ),
             );
             setState(() {
               _messages.add(ChatMessage(
-                text: 'Plan executed successfully! ${plan.affectedCount} files moved and organized.',
+                text: 'Plan executed successfully! $executedCount file operations completed on your device.',
                 isUser: false,
                 time: DateTime.now(),
               ));
@@ -736,33 +853,67 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
         child: Wrap(
           children: [
             ListTile(
-              leading: const Icon(Icons.picture_as_pdf, color: Color(0xFFEF4444)),
-              title: const Text('Move and rename recent PDFs'),
+              leading: const Icon(Icons.auto_awesome, color: Color(0xFF6046E8)),
+              title: const Text('Organize files by category'),
               onTap: () {
                 Navigator.pop(ctx);
-                _sendMessage(
-                  'Move all PDFs from Downloads to Documents and rename them with today\'s date.',
-                );
+                _sendMessage('Organize my files by category into subfolders');
               },
             ),
             ListTile(
-              leading: const Icon(Icons.folder_delete, color: Color(0xFFF97316)),
-              title: const Text('Clean up duplicates in Photos'),
+              leading: const Icon(Icons.folder_delete_outlined, color: Color(0xFFF97316)),
+              title: const Text('Clean up duplicate files'),
               onTap: () {
                 Navigator.pop(ctx);
-                _sendMessage('Find and clean up duplicate photos.');
+                _sendMessage('Clean up duplicate files');
               },
             ),
             ListTile(
-              leading: const Icon(Icons.sort, color: Color(0xFF10B981)),
-              title: const Text('Organize Downloads folder by file type'),
+              leading: const Icon(Icons.create_new_folder_outlined, color: Color(0xFF10B981)),
+              title: const Text('Create a new folder'),
               onTap: () {
                 Navigator.pop(ctx);
-                _sendMessage('Organize my Downloads folder into Documents, Photos, and Videos.');
+                _showCreateFolderFromAi();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.folder_shared_outlined, color: Color(0xFF3B82F6)),
+              title: const Text('Authorize / Change folder'),
+              onTap: () async {
+                Navigator.pop(ctx);
+                await showDeviceFolderPicker(context, widget.fileService);
               },
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  void _showCreateFolderFromAi() {
+    final controller = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Create Folder'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: 'Folder name'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              final name = controller.text.trim();
+              if (name.isNotEmpty) {
+                Navigator.pop(ctx);
+                _sendMessage('Create folder named "$name"');
+              }
+            },
+            child: const Text('Submit to AI'),
+          ),
+        ],
       ),
     );
   }

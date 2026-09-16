@@ -37,15 +37,7 @@ class _FileListScreenState extends State<FileListScreen> {
     setState(() {
       _files = results;
       _loading = false;
-      // Pre-select 4 items to match Screen 3 initially
-      if (_selectedPaths.isEmpty && _files.length >= 4) {
-        _selectedPaths.addAll([
-          _files[0].path,
-          _files[1].path,
-          _files[3].path,
-          if (_files.length > 5) _files[5].path,
-        ]);
-      }
+      _selectedPaths.clear();
     });
   }
 
@@ -149,7 +141,37 @@ class _FileListScreenState extends State<FileListScreen> {
             Expanded(
               child: _loading
                   ? const Center(child: CircularProgressIndicator())
-                  : ListView.builder(
+                  : _files.isEmpty
+                      ? Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                widget.category.icon,
+                                size: 56,
+                                color: widget.category.color.withValues(alpha: 0.4),
+                              ),
+                              const SizedBox(height: 14),
+                              Text(
+                                'No ${widget.category.label} found',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                  color: isDark ? Colors.white70 : const Color(0xFF1F2937),
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                'Files in this category will appear here',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: isDark ? Colors.white38 : Colors.black38,
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      : ListView.builder(
                       padding: const EdgeInsets.fromLTRB(20, 14, 20, 90),
                       itemCount: _files.length,
                       itemBuilder: (context, index) {

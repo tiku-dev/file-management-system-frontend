@@ -101,6 +101,7 @@ class _MainShellState extends State<MainShell> {
         case 4:
           currentBody = SettingsScreen(
             api: widget.api,
+            fileService: widget.fileService,
             isDark: isDark,
             onThemeModeChanged: widget.onThemeModeChanged,
             onLogout: widget.onLogout,

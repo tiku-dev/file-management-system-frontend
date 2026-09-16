@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../models.dart';
@@ -101,164 +102,119 @@ class SmartFileApi {
     String instruction,
     List<Map<String, dynamic>> results,
   ) async {
-    if (isDemoMode) {
-      return _generateDemoPlan(instruction);
+    try {
+      final body = await _post('/api/mobile/plan', {
+        'instruction': instruction,
+        if (results.isNotEmpty) 'toolResults': results,
+      });
+      final rawOperations = body['operations'];
+      if (rawOperations is List) {
+        final ops = rawOperations.whereType<Map>().map((raw) {
+          final map = Map<String, dynamic>.from(raw);
+          return PlannedOperation(
+            id: map['id']?.toString() ?? 'op-${DateTime.now().millisecondsSinceEpoch}',
+            name: map['name'] as String? ?? 'operation',
+            input: Map<String, dynamic>.from(map['input'] as Map? ?? {}),
+            requiresApproval: map['requiresApproval'] == true,
+          );
+        }).toList();
+
+        final steps = <AiPlanStep>[];
+        for (var i = 0; i < ops.length; i++) {
+          final op = ops[i];
+          steps.add(AiPlanStep(
+            stepNumber: i + 1,
+            title: op.summary,
+            description: op.name,
+            badgeText: 'Step ${i + 1}',
+            isDestructive: op.requiresApproval,
+          ));
+        }
+
+        return AiPlan(
+          reply: body['reply'] is String ? body['reply'] as String : null,
+          operations: ops,
+          steps: steps,
+          affectedCount: ops.length,
+          sourcePath: '',
+          destinationPath: '',
+          estimatedSeconds: (ops.length * 0.5).ceil().clamp(1, 10),
+          previewFiles: ops
+              .map((op) => op.input['newName']?.toString() ?? op.input['path']?.toString() ?? '')
+              .where((s) => s.isNotEmpty)
+              .take(3)
+              .toList(),
+        );
+      }
+    } catch (e) {
+      debugPrint('Mobile plan server call failed: $e');
+      if (!isDemoMode) rethrow;
     }
 
-    final body = await _post('/api/mobile/plan', {
-      'instruction': instruction,
-      if (results.isNotEmpty) 'toolResults': results,
-    });
-    final rawOperations = body['operations'];
-    if (rawOperations is! List) {
-      throw ApiException('The server returned an invalid AI plan.');
-    }
-
-    final ops = rawOperations.whereType<Map>().map((raw) {
-      final map = Map<String, dynamic>.from(raw);
-      return PlannedOperation(
-        id: map['id'] as String,
-        name: map['name'] as String,
-        input: Map<String, dynamic>.from(map['input'] as Map),
-        requiresApproval: map['requiresApproval'] == true,
-      );
-    }).toList();
-
-    final steps = <AiPlanStep>[];
-    for (var i = 0; i < ops.length; i++) {
-      final op = ops[i];
-      steps.add(AiPlanStep(
-        stepNumber: i + 1,
-        title: op.summary,
-        description: op.name,
-        badgeText: 'Step ${i + 1}',
-        isDestructive: op.requiresApproval,
-      ));
-    }
-
-    return AiPlan(
-      reply: body['reply'] is String ? body['reply'] as String : null,
-      operations: ops,
-      steps: steps.isNotEmpty ? steps : _defaultStepsForInstruction(instruction),
-      affectedCount: ops.isNotEmpty ? ops.length : 14,
-      sourcePath: '/Downloads',
-      destinationPath: '/Documents',
-      estimatedSeconds: 6,
-      previewFiles: const ['Invoice-Mar.pdf', 'Contract.pdf'],
-    );
+    return _generateLocalPlan(instruction);
   }
 
-  AiPlan _generateDemoPlan(String instruction) {
+  AiPlan _generateLocalPlan(String instruction) {
     final lower = instruction.toLowerCase();
-    if (lower.contains('pdf') || lower.contains('download') || lower.contains('move')) {
-      return const AiPlan(
-        reply: "Found 14 PDFs in Downloads. Here's my plan:",
+    final batchMatch = RegExp(
+      r'rename\s+(?:all\s+)?(images?|photos?|pics?|files?|videos?|docs?|documents?)(?:\s+(?:starting\s+)?(?:from|form|to|as|like)\s+([a-zA-Z]+)(?:_(\d+)|\s+(\d+))?)?',
+      caseSensitive: false,
+    ).firstMatch(instruction);
+
+    if (batchMatch != null) {
+      final prefix = batchMatch.group(2) ?? 'image';
+      final startIdx = int.tryParse(batchMatch.group(3) ?? batchMatch.group(4) ?? '1') ?? 1;
+      return AiPlan(
+        reply: 'I will rename all images starting from ${prefix}_$startIdx sequentially till the end.',
         operations: [
           PlannedOperation(
-            id: 'demo-op-1',
-            name: 'move_file',
-            input: {
-              'sourcePath': '/Downloads/CS-Lecture-Notes.pdf',
-              'destinationPath': '/Documents/CS-Lecture-Notes.pdf',
-            },
-            requiresApproval: true,
-          ),
-          PlannedOperation(
-            id: 'demo-op-2',
+            id: 'op-local-1',
             name: 'rename_file',
-            input: {
-              'path': '/Documents/CS-Lecture-Notes.pdf',
-              'newName': '2026-09-16_CS-Lecture-Notes.pdf',
-            },
-            requiresApproval: true,
-          ),
-          PlannedOperation(
-            id: 'demo-op-3',
-            name: 'delete_item',
-            input: {'path': '/Downloads/EmptyFolder'},
+            input: {'path': 'image.jpg', 'newName': '${prefix}_$startIdx.jpg'},
             requiresApproval: true,
           ),
         ],
         steps: [
           AiPlanStep(
             stepNumber: 1,
-            title: 'Move 14 files → Documents',
-            description: 'Source: /Downloads, Destination: /Documents',
+            title: 'Rename images starting from ${prefix}_$startIdx',
+            description: 'Apply sequential numbering',
             badgeText: 'Step 1',
-          ),
-          AiPlanStep(
-            stepNumber: 2,
-            title: 'Rename → prefix "2026-09-08_*"',
-            description: 'Apply current date prefix to organized PDFs',
-            badgeText: 'Step 2',
-          ),
-          AiPlanStep(
-            stepNumber: 3,
-            title: 'Archive original folder to Trash',
-            description: 'Cleanup residual empty download artifacts',
-            badgeText: 'Step 3',
             isDestructive: true,
           ),
         ],
-        affectedCount: 14,
-        sourcePath: '/Downloads',
-        destinationPath: '/Documents',
-        estimatedSeconds: 6,
-        previewFiles: ['Invoice-Mar.pdf', 'Contract.pdf'],
       );
     }
 
-    return AiPlan(
-      reply: 'I analyzed your request. Here is what I can do:',
-      operations: [
-        PlannedOperation(
-          id: 'demo-op-1',
-          name: 'organize_files',
-          input: {
-            'sourceDirectory': '/Documents',
-            'strategy': 'by_type',
-          },
-          requiresApproval: true,
-        ),
-      ],
-      steps: const [
-        AiPlanStep(
-          stepNumber: 1,
-          title: 'Scan and categorize documents',
-          description: 'Categorize files by extension and date',
-          badgeText: 'Step 1',
-        ),
-      ],
-      affectedCount: 8,
-      sourcePath: '/Documents',
-      destinationPath: '/Documents/Organized',
-      estimatedSeconds: 4,
-      previewFiles: const ['CS-Lecture-Notes-W3.pdf', 'Budget-Tracker-Q4.xlsx'],
-    );
-  }
+    if (lower.contains('organize') || lower.contains('sort')) {
+      return const AiPlan(
+        reply: 'I will organize your files into category subfolders.',
+        operations: [
+          PlannedOperation(
+            id: 'op-local-1',
+            name: 'organize_files',
+            input: {'sourceDirectory': '.', 'strategy': 'by_type'},
+            requiresApproval: true,
+          ),
+        ],
+        steps: [
+          AiPlanStep(
+            stepNumber: 1,
+            title: 'Organize files into folders',
+            description: 'Sort by Documents, Photos, Videos, etc.',
+            badgeText: 'Step 1',
+            isDestructive: true,
+          ),
+        ],
+      );
+    }
 
-  List<AiPlanStep> _defaultStepsForInstruction(String instruction) {
-    return const [
-      AiPlanStep(
-        stepNumber: 1,
-        title: 'Move 14 files → Documents',
-        description: 'Source: /Downloads, Destination: /Documents',
-        badgeText: 'Step 1',
-      ),
-      AiPlanStep(
-        stepNumber: 2,
-        title: 'Rename → prefix "2026-09-08_*"',
-        description: 'Apply date prefix to files',
-        badgeText: 'Step 2',
-      ),
-      AiPlanStep(
-        stepNumber: 3,
-        title: 'Archive original folder to Trash',
-        description: 'Cleanup original folder',
-        badgeText: 'Step 3',
-        isDestructive: true,
-      ),
-    ];
+    return const AiPlan(
+      reply:
+          'I am ready to help manage your device files. You can ask me to rename files, organize into folders, or clean up duplicates.',
+      operations: [],
+      steps: [],
+    );
   }
 
   Future<Map<String, dynamic>> bootstrap() {
