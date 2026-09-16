@@ -2,10 +2,41 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:smart_file/main.dart';
 
 void main() {
-  testWidgets('shows the Smart File shell', (tester) async {
+  testWidgets('shows AuthScreen entry point and enters demo mode',
+      (tester) async {
     await tester.pumpWidget(const SmartFileApp());
+    await tester.pumpAndSettle();
 
-    expect(find.text('Smart File'), findsOneWidget);
-    expect(find.text('Choose a folder to begin'), findsOneWidget);
+    // Verify AuthScreen is the entry point
+    expect(find.text('FileMind AI'), findsOneWidget);
+    expect(find.text('Sign In'), findsWidgets);
+    expect(find.text('Explore Demo Mode (Instant)'), findsOneWidget);
+
+    // Tap Explore Demo Mode
+    await tester.tap(find.text('Explore Demo Mode (Instant)'));
+    await tester.pumpAndSettle();
+
+    // Verify MainShell is now loaded
+    expect(find.text('Files'), findsOneWidget);
+    expect(find.text('118.2 GB used'), findsOneWidget);
+    expect(find.text('AI Chat'), findsOneWidget);
+    expect(find.text('Browse'), findsOneWidget);
+    expect(find.text('Search'), findsOneWidget);
+    expect(find.text('Settings'), findsOneWidget);
+
+    // Navigate to AI Chat tab
+    await tester.tap(find.text('AI Chat'));
+    await tester.pumpAndSettle();
+    expect(find.text('AI Assistant'), findsOneWidget);
+    expect(find.text('Found 14 PDFs in Downloads. Here\'s my plan:'),
+        findsOneWidget);
+    expect(find.text('Confirm'), findsOneWidget);
+
+    // Navigate to Browse tab
+    await tester.tap(find.text('Browse'));
+    await tester.pumpAndSettle();
+    expect(find.text('Documents'), findsWidgets);
+    expect(find.text('Photos'), findsWidgets);
+    expect(find.text('Videos'), findsWidgets);
   });
 }
