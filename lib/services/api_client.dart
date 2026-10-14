@@ -17,10 +17,7 @@ class ApiException implements Exception {
 
 class SmartFileApi {
   SmartFileApi({String? baseUrl})
-      : baseUrl = baseUrl ??
-            (Platform.isAndroid
-                ? 'http://127.0.0.1:4000'
-                : 'http://127.0.0.1:4000');
+      : baseUrl = baseUrl ?? 'http://127.0.0.1:8000';
 
   String baseUrl;
   String? token;
@@ -81,6 +78,23 @@ class SmartFileApi {
     return await login(email: email, password: password);
   }
 
+  Future<UserAccount> fetchCurrentUser() async {
+    if (isDemoMode && currentUser != null) {
+      return currentUser!;
+    }
+    final body = await _get('/api/auth/me');
+    final rawUser = body['user'];
+    if (rawUser is Map) {
+      currentUser = UserAccount(
+        id: rawUser['id']?.toString() ?? 'user-1',
+        email: rawUser['email']?.toString() ?? '',
+        displayName: rawUser['displayName']?.toString() ?? 'User',
+      );
+      return currentUser!;
+    }
+    throw ApiException('The server did not return a valid user profile.');
+  }
+
   UserAccount startDemoSession() {
     isDemoMode = true;
     token = 'demo-session-token';
@@ -93,9 +107,26 @@ class SmartFileApi {
   }
 
   void logout() {
+    final activeToken = token;
+    final wasDemo = isDemoMode;
     token = null;
     currentUser = null;
     isDemoMode = false;
+
+    if (activeToken != null && !wasDemo) {
+      unawaited(
+        http
+            .post(
+              _uri('/api/auth/logout'),
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer $activeToken',
+              },
+            )
+            .timeout(const Duration(seconds: 5))
+            .catchError((_) => http.Response('', 500)),
+      );
+    }
   }
 
   Future<AiPlan> plan(
@@ -232,11 +263,22 @@ class SmartFileApi {
     return _get('/api/mobile/bootstrap');
   }
 
+  Future<Map<String, dynamic>> capabilities() {
+    if (isDemoMode) {
+      return Future.value({
+        'protocolVersion': '1',
+        'execution': 'client-side',
+        'operations': [],
+      });
+    }
+    return _get('/api/mobile/capabilities');
+  }
+
   Future<bool> checkHealth() async {
     try {
       final response = await http
           .get(_uri('/api/health'))
-          .timeout(const Duration(seconds: 4));
+          .timeout(const Duration(seconds: 10));
       return response.statusCode >= 200 && response.statusCode < 300;
     } catch (_) {
       return false;

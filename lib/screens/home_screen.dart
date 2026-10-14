@@ -4,6 +4,7 @@ import '../models.dart';
 import '../services/local_file_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/folder_picker_sheet.dart';
+import '../widgets/permission_dialogs.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({
@@ -631,14 +632,29 @@ class HomeScreen extends StatelessWidget {
                 return;
               }
 
-              final cleaned = await fileService.cleanupDuplicates();
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('Cleaned $cleaned duplicate files from device!'),
-                    backgroundColor: const Color(0xFF10B981),
-                  ),
-                );
+              final totalBytes = duplicates.fold(0, (sum, p) => sum + p.duplicate.sizeBytes);
+              String formatBytes(int bytes) {
+                if (bytes < 1024) return '$bytes B';
+                if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+                return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+              }
+
+              final confirmed = await showCleanupDuplicatesDialog(
+                context,
+                count: duplicates.length,
+                totalReclaimable: formatBytes(totalBytes),
+              );
+
+              if (confirmed && context.mounted) {
+                final cleaned = await fileService.cleanupDuplicates();
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Cleaned $cleaned duplicate files from device!'),
+                      backgroundColor: const Color(0xFF10B981),
+                    ),
+                  );
+                }
               }
             },
             child: Container(

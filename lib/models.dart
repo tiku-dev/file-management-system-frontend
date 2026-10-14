@@ -114,6 +114,7 @@ class FileEntry {
         return const Color(0xFF2563EB);
       case 'xls':
       case 'xlsx':
+      case 'csv':
         return const Color(0xFF10B981);
       case 'ppt':
       case 'pptx':
@@ -122,21 +123,61 @@ class FileEntry {
       case 'jpg':
       case 'jpeg':
       case 'png':
+      case 'webp':
+      case 'gif':
         return const Color(0xFF10B981);
       case 'mp3':
       case 'wav':
       case 'aac':
+      case 'm4a':
+      case 'flac':
         return const Color(0xFFA855F7);
       case 'mp4':
       case 'mov':
       case 'mkv':
+      case 'avi':
         return const Color(0xFFF97316);
       case 'apk':
-        return const Color(0xFF10B981);
+        return const Color(0xFF059669);
+      case 'txt':
+      case 'md':
+      case 'log':
+      case 'json':
+        return const Color(0xFF06B6D4);
       default:
         return const Color(0xFF6B7280);
     }
   }
+
+  bool get isDocument => const ['pdf', 'doc', 'docx', 'txt', 'rtf', 'odt', 'log', 'md'].contains(extension);
+  bool get isPdf => extension == 'pdf';
+  bool get isExcel => const ['xls', 'xlsx', 'csv'].contains(extension);
+  bool get isPpt => const ['ppt', 'pptx'].contains(extension);
+  bool get isApk => extension == 'apk';
+  bool get isImage => const ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'heic'].contains(extension);
+  bool get isVideo => const ['mp4', 'mov', 'avi', 'mkv', 'webm', '3gp'].contains(extension);
+  bool get isAudio => const ['mp3', 'wav', 'aac', 'm4a', 'flac', 'ogg'].contains(extension);
+  bool get isTextReadable => const [
+        'txt',
+        'json',
+        'csv',
+        'xml',
+        'log',
+        'md',
+        'yaml',
+        'yml',
+        'dart',
+        'py',
+        'js',
+        'ts',
+        'html',
+        'css',
+        'ini',
+        'conf',
+        'sh',
+        'bat',
+        'sql',
+      ].contains(extension);
 
   FileCategory get category {
     switch (extension) {
@@ -148,6 +189,8 @@ class FileEntry {
       case 'pptx':
       case 'xls':
       case 'xlsx':
+      case 'csv':
+      case 'md':
         return FileCategory.documents;
       case 'heic':
       case 'jpg':
@@ -191,12 +234,12 @@ class FileEntry {
 
   String get formattedDate {
     final now = DateTime.now();
-    final diff = now.difference(modified);
-    if (diff.inDays == 0 && modified.day == now.day) {
+    if (modified.year == now.year && modified.month == now.month && modified.day == now.day) {
       final hour = modified.hour.toString().padLeft(2, '0');
       final min = modified.minute.toString().padLeft(2, '0');
       return 'Today · $hour:$min';
     }
+    final diff = now.difference(modified);
     if (diff.inDays <= 1) {
       return 'Yesterday';
     }

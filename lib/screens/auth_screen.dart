@@ -482,7 +482,7 @@ class _AuthScreenState extends State<AuthScreen> {
                             controller: _serverUrlController,
                             decoration: const InputDecoration(
                               labelText: 'Backend Base URL',
-                              hintText: 'http://127.0.0.1:4000',
+                              hintText: 'http://127.0.0.1:8000',
                               isDense: true,
                             ),
                           ),
@@ -493,27 +493,27 @@ class _AuthScreenState extends State<AuthScreen> {
                             runSpacing: 6,
                             children: [
                               ActionChip(
-                                label: const Text('127.0.0.1:4000 (ADB/USB)',
+                                label: const Text('127.0.0.1:8000 (ADB/USB)',
                                     style: TextStyle(fontSize: 11)),
                                 onPressed: () {
                                   _serverUrlController.text =
-                                      'http://127.0.0.1:4000';
+                                      'http://127.0.0.1:8000';
                                 },
                               ),
                               ActionChip(
-                                label: const Text('192.168.1.158:4000 (Wi-Fi)',
+                                label: const Text('192.168.100.228:8000 (Wi-Fi)',
                                     style: TextStyle(fontSize: 11)),
                                 onPressed: () {
                                   _serverUrlController.text =
-                                      'http://192.168.1.158:4000';
+                                      'http://192.168.100.228:8000';
                                 },
                               ),
                               ActionChip(
-                                label: const Text('10.0.2.2:4000 (Emulator)',
+                                label: const Text('10.0.2.2:8000 (Emulator)',
                                     style: TextStyle(fontSize: 11)),
                                 onPressed: () {
                                   _serverUrlController.text =
-                                      'http://10.0.2.2:4000';
+                                      'http://10.0.2.2:8000';
                                 },
                               ),
                             ],
@@ -535,7 +535,7 @@ class _AuthScreenState extends State<AuthScreen> {
                                           content: Text(
                                             ok
                                                 ? 'Connected! Backend is healthy.'
-                                                : 'Cannot reach $testUrl. Check that backend is running and adb reverse tcp:4000 tcp:4000 was executed.',
+                                                : 'Cannot reach $testUrl. Check that backend_drf is running and adb reverse tcp:8000 tcp:8000 was executed.',
                                           ),
                                           backgroundColor: ok
                                               ? const Color(0xFF10B981)

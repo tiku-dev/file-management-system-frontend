@@ -6,6 +6,7 @@ import '../services/local_file_service.dart';
 import 'ai_assistant_screen.dart';
 import 'browse_screen.dart';
 import 'file_list_screen.dart';
+import 'file_preview_screen.dart';
 import 'home_screen.dart';
 import 'search_screen.dart';
 import 'settings_screen.dart';
@@ -30,22 +31,50 @@ class MainShell extends StatefulWidget {
   State<MainShell> createState() => _MainShellState();
 }
 
-class _MainShellState extends State<MainShell> {
+class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   int _currentIndex = 0;
-  String _activeSearchQuery = 'tax 2024';
+  String _activeSearchQuery = '';
   FileCategory? _selectedCategory;
+  String? _selectedFolderPath;
+  String? _selectedFolderTitle;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      widget.fileService.refresh();
+    });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      widget.fileService.syncOnResume();
+    }
+  }
 
   void _navigateToTab(int index) {
     setState(() {
       _selectedCategory = null;
+      _selectedFolderPath = null;
+      _selectedFolderTitle = null;
       _currentIndex = index;
     });
   }
 
-  void _handleOpenSearch([String query = 'tax 2024']) {
+  void _handleOpenSearch([String query = '']) {
     setState(() {
       _activeSearchQuery = query;
       _selectedCategory = null;
+      _selectedFolderPath = null;
+      _selectedFolderTitle = null;
       _currentIndex = 3; // Search tab
     });
   }
@@ -53,7 +82,21 @@ class _MainShellState extends State<MainShell> {
   void _handleSelectCategory(FileCategory category) {
     setState(() {
       _selectedCategory = category;
+      _selectedFolderPath = null;
+      _selectedFolderTitle = null;
     });
+  }
+
+  void _openFilePreview(FileEntry file) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => FilePreviewScreen(
+          file: file,
+          fileService: widget.fileService,
+        ),
+      ),
+    );
   }
 
   @override
@@ -62,7 +105,17 @@ class _MainShellState extends State<MainShell> {
     final isDark = widget.isDark;
 
     Widget currentBody;
-    if (_selectedCategory != null) {
+    if (_selectedFolderPath != null) {
+      currentBody = FileListScreen(
+        fileService: widget.fileService,
+        folderPath: _selectedFolderPath!,
+        folderTitle: _selectedFolderTitle,
+        onBack: () => setState(() {
+          _selectedFolderPath = null;
+          _selectedFolderTitle = null;
+        }),
+      );
+    } else if (_selectedCategory != null) {
       currentBody = FileListScreen(
         fileService: widget.fileService,
         category: _selectedCategory!,
@@ -76,7 +129,7 @@ class _MainShellState extends State<MainShell> {
             onOpenSearch: () => _handleOpenSearch(''),
             onOpenAiAssistant: () => _navigateToTab(2),
             onOpenBrowse: () => _navigateToTab(1),
-            onFileTap: (file) => _handleSelectCategory(file.category),
+            onFileTap: _openFilePreview,
           );
           break;
         case 1:

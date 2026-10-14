@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../models.dart';
 import '../services/local_file_service.dart';
+import '../widgets/destination_folder_picker.dart';
+import '../widgets/permission_dialogs.dart';
+import 'file_preview_screen.dart';
 
 class SearchScreen extends StatefulWidget {
   const SearchScreen({
@@ -39,9 +42,25 @@ class _SearchScreenState extends State<SearchScreen> {
     super.dispose();
   }
 
-  Future<void> _performSearch(String query) async {
+  List<Map<String, dynamic>> _buildFilterChips() {
+    return [
+      {'label': 'All', 'count': widget.fileService.totalFilesCount, 'type': 'All'},
+      {'label': 'Docs', 'count': widget.fileService.getPopularFiles(popularType: 'Docs').length, 'type': 'Docs'},
+      {'label': 'APKs', 'count': widget.fileService.getPopularFiles(popularType: 'APKs').length, 'type': 'APKs'},
+      {'label': 'PPT', 'count': widget.fileService.getPopularFiles(popularType: 'PPT').length, 'type': 'PPT'},
+      {'label': 'Excel', 'count': widget.fileService.getPopularFiles(popularType: 'Excel').length, 'type': 'Excel'},
+      {'label': 'Photos', 'count': widget.fileService.getPopularFiles(popularType: 'Photos').length, 'type': 'Photos'},
+      {'label': 'Videos', 'count': widget.fileService.getPopularFiles(popularType: 'Videos').length, 'type': 'Videos'},
+      {'label': 'Audio', 'count': widget.fileService.getPopularFiles(popularType: 'Audio').length, 'type': 'Audio'},
+    ];
+  }
+
+  Future<void> _performSearch([String? query]) async {
+    final q = query ?? _controller.text;
+    final chips = _buildFilterChips();
+    final filterType = _selectedFilterIndex < chips.length ? chips[_selectedFilterIndex]['type'] as String : 'All';
     setState(() => _searching = true);
-    final results = await widget.fileService.search(query);
+    final results = await widget.fileService.search(q, filterType: filterType);
     if (!mounted) return;
     setState(() {
       _results = results;
@@ -49,43 +68,18 @@ class _SearchScreenState extends State<SearchScreen> {
     });
   }
 
-  List<Map<String, dynamic>> _buildFilterChips() {
-    return [
-      {'label': 'All', 'count': widget.fileService.totalFilesCount, 'category': null},
-      {
-        'label': 'Docs',
-        'count': widget.fileService.getCategoryCount(FileCategory.documents),
-        'category': FileCategory.documents,
-      },
-      {
-        'label': 'Photos',
-        'count': widget.fileService.getCategoryCount(FileCategory.photos),
-        'category': FileCategory.photos,
-      },
-      {
-        'label': 'Videos',
-        'count': widget.fileService.getCategoryCount(FileCategory.videos),
-        'category': FileCategory.videos,
-      },
-      {
-        'label': 'Audio',
-        'count': widget.fileService.getCategoryCount(FileCategory.audio),
-        'category': FileCategory.audio,
-      },
-      {
-        'label': 'APKs',
-        'count': widget.fileService.getCategoryCount(FileCategory.apks),
-        'category': FileCategory.apks,
-      },
-    ];
-  }
-
-  List<FileEntry> get _filteredResults {
-    final chips = _buildFilterChips();
-    if (_selectedFilterIndex >= chips.length) return _results;
-    final cat = chips[_selectedFilterIndex]['category'] as FileCategory?;
-    if (cat == null) return _results;
-    return _results.where((f) => f.category == cat).toList();
+  void _openFilePreview(FileEntry file) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => FilePreviewScreen(
+          file: file,
+          fileService: widget.fileService,
+          onFileDeleted: () => _performSearch(),
+          onFileRenamed: (_) => _performSearch(),
+        ),
+      ),
+    );
   }
 
   @override
@@ -97,7 +91,7 @@ class _SearchScreenState extends State<SearchScreen> {
         final cardColor = Theme.of(context).cardColor;
         final outlineColor = Theme.of(context).colorScheme.outline;
         final filterChips = _buildFilterChips();
-        final displayResults = _filteredResults;
+        final currentFilterLabel = filterChips[_selectedFilterIndex]['label'] as String;
 
         return Scaffold(
           body: SafeArea(
@@ -174,8 +168,8 @@ class _SearchScreenState extends State<SearchScreen> {
                         Expanded(
                           child: TextField(
                             controller: _controller,
-                            onChanged: _performSearch,
-                            onSubmitted: _performSearch,
+                            onChanged: (val) => _performSearch(val),
+                            onSubmitted: (val) => _performSearch(val),
                             decoration: InputDecoration(
                               hintText: widget.fileService.isAuthorized
                                   ? 'Search files in ${widget.fileService.authorizedFolderName}...'
@@ -199,21 +193,22 @@ class _SearchScreenState extends State<SearchScreen> {
                   ),
                 ),
 
-                // Dynamic Status line
+                // Popular categories label & filter chips row
                 Padding(
                   padding: const EdgeInsets.fromLTRB(20, 2, 20, 10),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      _controller.text.isEmpty
-                          ? 'Showing all files in ${widget.fileService.authorizedFolderName}'
-                          : 'Matches for "${_controller.text}" (${displayResults.length} items)',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: isDark ? Colors.white54 : const Color(0xFF6B7280),
+                  child: Row(
+                    children: [
+                      Text(
+                        _controller.text.isEmpty
+                            ? 'Popular Categories ($currentFilterLabel: ${_results.length} files)'
+                            : 'Matches for "${_controller.text}" in $currentFilterLabel (${_results.length})',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: isDark ? Colors.white60 : const Color(0xFF4B5563),
+                        ),
                       ),
-                    ),
+                    ],
                   ),
                 ),
 
@@ -231,7 +226,10 @@ class _SearchScreenState extends State<SearchScreen> {
                         final item = filterChips[index];
 
                         return GestureDetector(
-                          onTap: () => setState(() => _selectedFilterIndex = index),
+                          onTap: () {
+                            setState(() => _selectedFilterIndex = index);
+                            _performSearch();
+                          },
                           child: Container(
                             padding: const EdgeInsets.symmetric(
                               horizontal: 14,
@@ -294,7 +292,7 @@ class _SearchScreenState extends State<SearchScreen> {
                 Expanded(
                   child: _searching
                       ? const Center(child: CircularProgressIndicator())
-                      : displayResults.isEmpty
+                      : _results.isEmpty
                           ? Center(
                               child: Column(
                                 mainAxisAlignment: MainAxisAlignment.center,
@@ -315,7 +313,7 @@ class _SearchScreenState extends State<SearchScreen> {
                                   ),
                                   const SizedBox(height: 6),
                                   Text(
-                                    'Try adjusting your search or category filter',
+                                    'Try selecting another category or check your folder',
                                     style: TextStyle(
                                       fontSize: 13,
                                       color: isDark ? Colors.white38 : Colors.black38,
@@ -326,9 +324,9 @@ class _SearchScreenState extends State<SearchScreen> {
                             )
                           : ListView.builder(
                               padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-                              itemCount: displayResults.length,
+                              itemCount: _results.length,
                               itemBuilder: (context, index) {
-                                final file = displayResults[index];
+                                final file = _results[index];
                                 return _buildResultItem(context, file, isDark, cardColor, outlineColor);
                               },
                             ),
@@ -355,7 +353,8 @@ class _SearchScreenState extends State<SearchScreen> {
         borderRadius: BorderRadius.circular(16),
         child: InkWell(
           borderRadius: BorderRadius.circular(16),
-          onTap: () => _showFileDetails(context, file),
+          onTap: () => _openFilePreview(file),
+          onLongPress: () => _showFileOptions(context, file),
           child: Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
@@ -401,7 +400,7 @@ class _SearchScreenState extends State<SearchScreen> {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        '${file.formattedDate} · ${file.formattedSize}',
+                        '${file.folderName} · ${file.formattedDate} · ${file.formattedSize}',
                         style: TextStyle(
                           fontSize: 12,
                           color: isDark ? Colors.white60 : const Color(0xFF6B7280),
@@ -410,10 +409,13 @@ class _SearchScreenState extends State<SearchScreen> {
                     ],
                   ),
                 ),
-                Icon(
-                  Icons.chevron_right,
-                  size: 18,
-                  color: isDark ? Colors.white38 : Colors.black26,
+                IconButton(
+                  icon: Icon(
+                    Icons.more_vert,
+                    size: 20,
+                    color: isDark ? Colors.white38 : Colors.black38,
+                  ),
+                  onPressed: () => _showFileOptions(context, file),
                 ),
               ],
             ),
@@ -423,7 +425,7 @@ class _SearchScreenState extends State<SearchScreen> {
     );
   }
 
-  void _showFileDetails(BuildContext context, FileEntry file) {
+  void _showFileOptions(BuildContext context, FileEntry file) {
     showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(
@@ -431,46 +433,70 @@ class _SearchScreenState extends State<SearchScreen> {
       ),
       builder: (ctx) => SafeArea(
         child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          child: Wrap(
             children: [
-              Text(
-                file.name,
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                child: Text(
+                  file.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                ),
               ),
-              const SizedBox(height: 10),
-              Text('Path: ${file.path}', style: const TextStyle(fontSize: 12, color: Colors.grey)),
-              Text('Size: ${file.formattedSize}', style: const TextStyle(fontSize: 12, color: Colors.grey)),
-              Text('Modified: ${file.formattedDate}', style: const TextStyle(fontSize: 12, color: Colors.grey)),
-              const SizedBox(height: 20),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      icon: const Icon(Icons.drive_file_rename_outline),
-                      label: const Text('Rename'),
-                      onPressed: () {
-                        Navigator.pop(ctx);
-                        _showRenameDialog(file);
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: FilledButton.icon(
-                      style: FilledButton.styleFrom(backgroundColor: const Color(0xFFEF4444)),
-                      icon: const Icon(Icons.delete_outline),
-                      label: const Text('Delete'),
-                      onPressed: () async {
-                        Navigator.pop(ctx);
-                        await widget.fileService.delete(file.path);
-                        _performSearch(_controller.text);
-                      },
-                    ),
-                  ),
-                ],
+              const Divider(),
+              ListTile(
+                leading: const Icon(Icons.remove_red_eye_outlined, color: Color(0xFF6046E8)),
+                title: const Text('Preview File'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _openFilePreview(file);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.drive_file_move_outlined, color: Color(0xFF6046E8)),
+                title: const Text('Move File'),
+                onTap: () async {
+                  Navigator.pop(ctx);
+                  final dest = await showDestinationFolderPicker(context, widget.fileService);
+                  if (dest != null && context.mounted) {
+                    final confirmed = await showMovePermissionDialog(
+                      context,
+                      count: 1,
+                      destinationName: dest['name']!,
+                      destinationPath: dest['path']!,
+                    );
+                    if (confirmed) {
+                      await widget.fileService.move(file.path, dest['path']!);
+                      _performSearch();
+                    }
+                  }
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.drive_file_rename_outline),
+                title: const Text('Rename'),
+                onTap: () async {
+                  Navigator.pop(ctx);
+                  _showRenameDialog(file);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.delete_outline, color: Color(0xFFEF4444)),
+                title: const Text('Delete', style: TextStyle(color: Color(0xFFEF4444))),
+                onTap: () async {
+                  Navigator.pop(ctx);
+                  final confirmed = await showDeletePermissionDialog(
+                    context,
+                    count: 1,
+                    fileNames: [file.name],
+                  );
+                  if (confirmed) {
+                    await widget.fileService.delete(file.path);
+                    _performSearch();
+                  }
+                },
               ),
             ],
           ),
@@ -485,7 +511,7 @@ class _SearchScreenState extends State<SearchScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Rename File'),
-        content: TextField(controller: controller),
+        content: TextField(controller: controller, autofocus: true),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
           FilledButton(
@@ -494,7 +520,7 @@ class _SearchScreenState extends State<SearchScreen> {
               if (newName.isNotEmpty && newName != file.name) {
                 Navigator.pop(ctx);
                 await widget.fileService.rename(file.path, newName);
-                _performSearch(_controller.text);
+                _performSearch();
               }
             },
             child: const Text('Rename'),

@@ -6,10 +6,13 @@ its children. The backend plans AI operations; the app executes them locally.
 
 ## Run on Windows
 
-Start the backend in `../backend`:
+Start the Django REST Framework backend in `../backend_drf`:
 
 ```powershell
-npm run dev
+cd ../backend_drf
+.\venv\Scripts\Activate.ps1
+python manage.py migrate
+python manage.py runserver 0.0.0.0:8000
 ```
 
 Then run the app:
@@ -24,12 +27,12 @@ user profile automatically.
 
 ## Run on Android
 
-For an Android emulator, the default backend URL is `http://10.0.2.2:4000`.
+For an Android emulator, the default backend URL is `http://10.0.2.2:8000`.
 For a physical phone:
 
-1. Find the computer's LAN IP address.
-2. Start the backend with `HOST=0.0.0.0` and allow port 4000 through the local firewall.
-3. Open Smart File → Settings and set `http://<computer-ip>:4000`.
+1. Find the computer's LAN IP address (or use USB with `adb reverse tcp:8000 tcp:8000`).
+2. Start `backend_drf` with `python manage.py runserver 0.0.0.0:8000` and allow port 8000 through the local firewall.
+3. Open Smart File → Settings and set `http://<computer-ip>:8000` (or `http://127.0.0.1:8000` over USB).
 4. Choose a folder through the Android system picker.
 
 The app does not contain a Groq key. Sign in with the backend account, then use

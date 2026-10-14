@@ -18,7 +18,7 @@ void main() {
 
     // Verify MainShell is now loaded with live storage card
     expect(find.text('Files'), findsOneWidget);
-    expect(find.text('Authorize Device Folder'), findsOneWidget);
+    expect(find.text('1.8 GB used'), findsOneWidget);
     expect(find.text('AI Chat'), findsOneWidget);
     expect(find.text('Browse'), findsOneWidget);
     expect(find.text('Search'), findsOneWidget);

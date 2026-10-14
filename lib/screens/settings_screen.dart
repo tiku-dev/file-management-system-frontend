@@ -469,7 +469,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           controller: controller,
           decoration: const InputDecoration(
             labelText: 'Server URL',
-            hintText: 'http://127.0.0.1:4000',
+            hintText: 'http://127.0.0.1:8000',
           ),
         ),
         actions: [
