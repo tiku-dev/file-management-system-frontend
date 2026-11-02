@@ -1,13 +1,13 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../models.dart';
 import '../services/local_file_service.dart';
 import '../widgets/destination_folder_picker.dart';
+import '../widgets/document_reader_view.dart';
 import '../widgets/permission_dialogs.dart';
 
 class FilePreviewScreen extends StatefulWidget {
@@ -30,9 +30,7 @@ class FilePreviewScreen extends StatefulWidget {
 
 class _FilePreviewScreenState extends State<FilePreviewScreen> with SingleTickerProviderStateMixin {
   late FileEntry _currentFile;
-  String? _textContent;
-  bool _isLoadingText = false;
-  String? _textError;
+  bool _forceDocumentReader = false;
 
   // Audio simulated playback state
   bool _isPlayingAudio = false;
@@ -47,64 +45,12 @@ class _FilePreviewScreenState extends State<FilePreviewScreen> with SingleTicker
       vsync: this,
       duration: const Duration(milliseconds: 1200),
     );
-
-    if (_currentFile.isTextReadable) {
-      _loadTextContent();
-    }
   }
 
   @override
   void dispose() {
     _waveController.dispose();
     super.dispose();
-  }
-
-  Future<void> _loadTextContent() async {
-    setState(() {
-      _isLoadingText = true;
-      _textError = null;
-    });
-
-    try {
-      final file = File(_currentFile.path);
-      if (await file.exists()) {
-        final length = await file.length();
-        if (length > 500 * 1024) {
-          // File is large, read first 50KB
-          final stream = file.openRead(0, 50 * 1024);
-          final bytes = await stream.expand((chunk) => chunk).toList();
-          final text = String.fromCharCodes(bytes);
-          if (mounted) {
-            setState(() {
-              _textContent = '$text\n\n--- [Preview truncated: file is larger than 500 KB] ---';
-              _isLoadingText = false;
-            });
-          }
-        } else {
-          final content = await file.readAsString();
-          if (mounted) {
-            setState(() {
-              _textContent = content;
-              _isLoadingText = false;
-            });
-          }
-        }
-      } else {
-        if (mounted) {
-          setState(() {
-            _textError = 'File does not exist on disk.';
-            _isLoadingText = false;
-          });
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _textError = 'Unable to preview text encoding ($e)';
-          _isLoadingText = false;
-        });
-      }
-    }
   }
 
   Future<void> _handleOpenWithExternalApp() async {
@@ -286,8 +232,12 @@ class _FilePreviewScreenState extends State<FilePreviewScreen> with SingleTicker
       return _buildAudioPreview(isDark, cardColor, outlineColor);
     } else if (_currentFile.isVideo) {
       return _buildVideoPreview(isDark, cardColor, outlineColor);
-    } else if (_currentFile.isTextReadable) {
-      return _buildTextPreview(isDark, cardColor, outlineColor);
+    } else if (_currentFile.isDocumentReadable || _forceDocumentReader) {
+      return DocumentReaderView(
+        file: _currentFile,
+        onOpenExternal: _handleOpenWithExternalApp,
+        onShare: _handleShare,
+      );
     } else {
       return _buildDocumentCardPreview(isDark, cardColor, outlineColor);
     }
@@ -634,107 +584,6 @@ class _FilePreviewScreenState extends State<FilePreviewScreen> with SingleTicker
     );
   }
 
-  Widget _buildTextPreview(bool isDark, Color cardColor, Color outlineColor) {
-    if (_isLoadingText) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
-    if (_textError != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.error_outline_rounded, color: Colors.redAccent, size: 48),
-              const SizedBox(height: 12),
-              Text(_textError!, textAlign: TextAlign.center),
-              const SizedBox(height: 16),
-              FilledButton.icon(
-                onPressed: _handleOpenWithExternalApp,
-                icon: const Icon(Icons.open_in_new),
-                label: const Text('Open in External Editor'),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    final content = _textContent ?? '';
-    final lines = content.split('\n');
-
-    return Column(
-      children: [
-        // Subheader with line count and copy button
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          color: isDark ? const Color(0xFF161A29) : const Color(0xFFEFF2FE),
-          child: Row(
-            children: [
-              Text(
-                '${lines.length} lines · ${_currentFile.formattedSize}',
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF6046E8),
-                ),
-              ),
-              const Spacer(),
-              TextButton.icon(
-                onPressed: () {
-                  Clipboard.setData(ClipboardData(text: content));
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Copied file contents to clipboard')),
-                  );
-                },
-                icon: const Icon(Icons.copy_rounded, size: 14),
-                label: const Text('Copy All', style: TextStyle(fontSize: 12)),
-              ),
-            ],
-          ),
-        ),
-
-        // Monospace Syntax Area
-        Expanded(
-          child: Container(
-            color: isDark ? const Color(0xFF111420) : const Color(0xFFF8FAFC),
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
-              child: SelectableText.rich(
-                TextSpan(
-                  children: List.generate(lines.length, (index) {
-                    final lineNum = '${index + 1}'.padLeft(4, ' ');
-                    return TextSpan(
-                      children: [
-                        TextSpan(
-                          text: '$lineNum  ',
-                          style: TextStyle(
-                            fontFamily: 'monospace',
-                            fontSize: 12,
-                            color: isDark ? Colors.white30 : Colors.black38,
-                          ),
-                        ),
-                        TextSpan(
-                          text: '${lines[index]}\n',
-                          style: TextStyle(
-                            fontFamily: 'monospace',
-                            fontSize: 12,
-                            color: isDark ? const Color(0xFFE2E8F0) : const Color(0xFF1E293B),
-                          ),
-                        ),
-                      ],
-                    );
-                  }),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
   Widget _buildDocumentCardPreview(bool isDark, Color cardColor, Color outlineColor) {
     final isApk = _currentFile.isApk;
 
@@ -786,19 +635,49 @@ class _FilePreviewScreenState extends State<FilePreviewScreen> with SingleTicker
             ),
             const SizedBox(height: 28),
 
-            FilledButton.icon(
-              style: FilledButton.styleFrom(
-                backgroundColor: isApk ? const Color(0xFF059669) : const Color(0xFF6046E8),
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            if (!isApk) ...[
+              FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF6046E8),
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                ),
+                onPressed: () {
+                  setState(() {
+                    _forceDocumentReader = true;
+                  });
+                },
+                icon: const Icon(Icons.menu_book_rounded, size: 20),
+                label: const Text(
+                  'Read Document in App',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+                ),
               ),
-              onPressed: _handleOpenWithExternalApp,
-              icon: Icon(isApk ? Icons.android_rounded : Icons.launch_rounded, size: 20),
-              label: Text(
-                isApk ? 'Install Application' : 'Open in Default App',
-                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                ),
+                onPressed: _handleOpenWithExternalApp,
+                icon: const Icon(Icons.launch_rounded, size: 18),
+                label: const Text('Open in Default App'),
               ),
-            ),
+            ] else ...[
+              FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF059669),
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                ),
+                onPressed: _handleOpenWithExternalApp,
+                icon: const Icon(Icons.android_rounded, size: 20),
+                label: const Text(
+                  'Install Application',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+                ),
+              ),
+            ],
             const SizedBox(height: 28),
 
             _buildMetadataTile(

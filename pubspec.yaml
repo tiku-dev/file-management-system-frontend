@@ -40,6 +40,10 @@ dependencies:
   path: ^1.9.1
   permission_handler: ^13.0.2
   share_plus: ^13.3.0
+  syncfusion_flutter_pdfviewer: ^35.1.42
+  archive: ^4.6.0
+  xml: ^7.1.0
+  syncfusion_flutter_pdf: ^35.1.42
 
 dev_dependencies:
   flutter_test:

@@ -151,6 +151,8 @@ class FileEntry {
 
   bool get isDocument => const ['pdf', 'doc', 'docx', 'txt', 'rtf', 'odt', 'log', 'md'].contains(extension);
   bool get isPdf => extension == 'pdf';
+  bool get isDocx => extension == 'docx';
+  bool get isDocumentReadable => isPdf || isDocx || isTextReadable;
   bool get isExcel => const ['xls', 'xlsx', 'csv'].contains(extension);
   bool get isPpt => const ['ppt', 'pptx'].contains(extension);
   bool get isApk => extension == 'apk';
