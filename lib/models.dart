@@ -366,6 +366,7 @@ class AiPlan {
     this.destinationPath,
     this.estimatedSeconds = 6,
     this.previewFiles = const [],
+    this.conversationId,
   });
 
   final String? reply;
@@ -376,6 +377,7 @@ class AiPlan {
   final String? destinationPath;
   final int estimatedSeconds;
   final List<String> previewFiles;
+  final String? conversationId;
 }
 
 class ChatMessage {
@@ -390,6 +392,147 @@ class ChatMessage {
   final bool isUser;
   final DateTime time;
   final AiPlan? plan;
+}
+
+class ChatConversation {
+  ChatConversation({
+    required this.id,
+    required this.title,
+    required this.createdAt,
+    required this.updatedAt,
+    List<ChatMessage>? messages,
+  }) : messages = messages ?? [];
+
+  final String id;
+  String title;
+  final DateTime createdAt;
+  DateTime updatedAt;
+  final List<ChatMessage> messages;
+
+  String get snippet {
+    if (messages.isEmpty) return 'No messages yet';
+    final last = messages.last;
+    return last.text.replaceAll('\n', ' ').trim();
+  }
+
+  String get formattedDate {
+    final now = DateTime.now();
+    if (updatedAt.year == now.year &&
+        updatedAt.month == now.month &&
+        updatedAt.day == now.day) {
+      final hour = updatedAt.hour.toString().padLeft(2, '0');
+      final min = updatedAt.minute.toString().padLeft(2, '0');
+      return 'Today · $hour:$min';
+    }
+    final diff = now.difference(updatedAt);
+    if (diff.inDays <= 1) return 'Yesterday';
+    if (diff.inDays < 7) return '${diff.inDays} days ago';
+    return '${updatedAt.month}/${updatedAt.day}/${updatedAt.year}';
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'title': title,
+        'createdAt': createdAt.toIso8601String(),
+        'updatedAt': updatedAt.toIso8601String(),
+        'messages': messages
+            .map((m) => {
+                  'text': m.text,
+                  'isUser': m.isUser,
+                  'time': m.time.toIso8601String(),
+                  if (m.plan != null)
+                    'plan': {
+                      'reply': m.plan!.reply,
+                      'affectedCount': m.plan!.affectedCount,
+                      'sourcePath': m.plan!.sourcePath,
+                      'destinationPath': m.plan!.destinationPath,
+                      'estimatedSeconds': m.plan!.estimatedSeconds,
+                      'previewFiles': m.plan!.previewFiles,
+                      'steps': m.plan!.steps
+                          .map((s) => {
+                                'stepNumber': s.stepNumber,
+                                'title': s.title,
+                                'description': s.description,
+                                'badgeText': s.badgeText,
+                                'isDestructive': s.isDestructive,
+                              })
+                          .toList(),
+                      'operations': m.plan!.operations
+                          .map((op) => {
+                                'id': op.id,
+                                'name': op.name,
+                                'input': op.input,
+                                'requiresApproval': op.requiresApproval,
+                              })
+                          .toList(),
+                    },
+                })
+            .toList(),
+      };
+
+  factory ChatConversation.fromJson(Map<String, dynamic> json) {
+    final rawMsgs = json['messages'] as List? ?? [];
+    final msgs = rawMsgs.whereType<Map>().map((m) {
+      AiPlan? plan;
+      if (m['plan'] is Map) {
+        final p = Map<String, dynamic>.from(m['plan'] as Map);
+        final rawOps = p['operations'] as List? ?? [];
+        final ops = rawOps.whereType<Map>().map((o) {
+          final opMap = Map<String, dynamic>.from(o);
+          return PlannedOperation(
+            id: opMap['id']?.toString() ?? 'op-1',
+            name: opMap['name']?.toString() ?? 'operation',
+            input: Map<String, dynamic>.from(opMap['input'] as Map? ?? {}),
+            requiresApproval: opMap['requiresApproval'] == true,
+          );
+        }).toList();
+
+        final rawSteps = p['steps'] as List? ?? [];
+        final steps = rawSteps.whereType<Map>().map((s) {
+          final sMap = Map<String, dynamic>.from(s);
+          return AiPlanStep(
+            stepNumber: sMap['stepNumber'] as int? ?? 1,
+            title: sMap['title']?.toString() ?? '',
+            description: sMap['description']?.toString() ?? '',
+            badgeText: sMap['badgeText']?.toString(),
+            isDestructive: sMap['isDestructive'] == true,
+          );
+        }).toList();
+
+        plan = AiPlan(
+          reply: p['reply']?.toString(),
+          operations: ops,
+          steps: steps,
+          affectedCount: p['affectedCount'] as int? ?? ops.length,
+          sourcePath: p['sourcePath']?.toString(),
+          destinationPath: p['destinationPath']?.toString(),
+          estimatedSeconds: p['estimatedSeconds'] as int? ?? 6,
+          previewFiles: (p['previewFiles'] as List?)
+                  ?.map((e) => e.toString())
+                  .toList() ??
+              const [],
+        );
+      }
+
+      return ChatMessage(
+        text: m['text'] as String? ?? '',
+        isUser: m['isUser'] == true,
+        time: DateTime.tryParse(m['time'] as String? ?? '') ?? DateTime.now(),
+        plan: plan,
+      );
+    }).toList();
+
+    return ChatConversation(
+      id: json['id']?.toString() ??
+          'conv-${DateTime.now().millisecondsSinceEpoch}',
+      title: json['title']?.toString() ?? 'Conversation',
+      createdAt:
+          DateTime.tryParse(json['createdAt'] as String? ?? '') ?? DateTime.now(),
+      updatedAt:
+          DateTime.tryParse(json['updatedAt'] as String? ?? '') ?? DateTime.now(),
+      messages: msgs,
+    );
+  }
 }
 
 class LocalActivity {

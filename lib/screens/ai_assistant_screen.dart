@@ -27,28 +27,124 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
   final ScrollController _scrollController = ScrollController();
   bool _isLoading = false;
 
-  final List<ChatMessage> _messages = [];
+  final List<ChatConversation> _conversations = [];
+  ChatConversation? _activeConversation;
+
+  List<ChatMessage> get _messages => _activeConversation?.messages ?? [];
 
   @override
   void initState() {
     super.initState();
-    _initChatHistory();
+    _loadConversations();
   }
 
-  void _initChatHistory() {
+  void _loadConversations() {
+    final local = widget.api.loadLocalConversations();
+    if (local.isNotEmpty) {
+      setState(() {
+        _conversations.clear();
+        _conversations.addAll(local);
+        _activeConversation = _conversations.first;
+      });
+    } else {
+      _startNewChat(save: false);
+    }
+
+    _syncRemoteConversations();
+  }
+
+  Future<void> _syncRemoteConversations() async {
+    try {
+      final remote = await widget.api.fetchRemoteConversations();
+      if (remote.isNotEmpty && mounted) {
+        setState(() {
+          final existingIds = _conversations.map((c) => c.id).toSet();
+          for (final r in remote) {
+            if (!existingIds.contains(r.id)) {
+              _conversations.add(r);
+            }
+          }
+        });
+        widget.api.saveLocalConversations(_conversations);
+      }
+    } catch (_) {}
+  }
+
+  void _startNewChat({bool save = true}) {
     final isAuth = widget.fileService.isAuthorized;
     final folder = widget.fileService.authorizedFolderName;
     final count = widget.fileService.totalFilesCount;
 
-    _messages.add(
-      ChatMessage(
-        text: isAuth
-            ? "Hello! I am FileMind AI. I'm connected to your device folder: $folder ($count files). You can ask me to organize files by category, clean up duplicates, rename files, or create folders."
-            : "Hello! I am FileMind AI. Please authorize a folder on your device so I can help manage, organize, and rename your files.",
-        isUser: false,
-        time: DateTime.now(),
-      ),
+    final welcomeMsg = ChatMessage(
+      text: isAuth
+          ? "Hello! I am FileMind AI. I'm connected to your device folder: $folder ($count files). You can ask me to organize files by category, clean up duplicates, rename files, or create folders."
+          : "Hello! I am FileMind AI. Please authorize a folder on your device so I can help manage, organize, and rename your files.",
+      isUser: false,
+      time: DateTime.now(),
     );
+
+    final newConv = ChatConversation(
+      id: 'conv-${DateTime.now().millisecondsSinceEpoch}',
+      title: 'New Conversation',
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
+      messages: [welcomeMsg],
+    );
+
+    setState(() {
+      _conversations.insert(0, newConv);
+      _activeConversation = newConv;
+    });
+
+    if (save) {
+      widget.api.saveLocalConversations(_conversations);
+    }
+    _scrollToBottom();
+  }
+
+  Future<void> _selectConversation(ChatConversation conv) async {
+    setState(() {
+      _activeConversation = conv;
+    });
+
+    if (conv.messages.isEmpty) {
+      final detailed = await widget.api.fetchRemoteConversationDetail(conv.id);
+      if (detailed != null && mounted) {
+        setState(() {
+          conv.messages.clear();
+          conv.messages.addAll(detailed.messages);
+        });
+        widget.api.saveLocalConversations(_conversations);
+      }
+    }
+
+    _scrollToBottom();
+  }
+
+  void _deleteConversation(ChatConversation conv) {
+    setState(() {
+      _conversations.removeWhere((c) => c.id == conv.id);
+      if (_activeConversation?.id == conv.id) {
+        if (_conversations.isNotEmpty) {
+          _activeConversation = _conversations.first;
+        } else {
+          _startNewChat(save: false);
+        }
+      }
+    });
+    widget.api.deleteRemoteConversation(conv.id);
+    widget.api.saveLocalConversations(_conversations);
+  }
+
+  void _clearAllConversations() {
+    for (final c in _conversations) {
+      widget.api.deleteRemoteConversation(c.id);
+    }
+    setState(() {
+      _conversations.clear();
+    });
+    widget.api.saveLocalConversations(_conversations);
+    _startNewChat();
   }
 
   @override
@@ -62,16 +158,29 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
     final text = (presetText ?? _textController.text).trim();
     if (text.isEmpty || _isLoading) return;
 
+    if (_activeConversation == null) {
+      _startNewChat(save: false);
+    }
+
+    final conv = _activeConversation!;
     _textController.clear();
+
+    final userMsg = ChatMessage(
+      text: text,
+      isUser: true,
+      time: DateTime.now(),
+    );
+
     setState(() {
-      _messages.add(ChatMessage(
-        text: text,
-        isUser: true,
-        time: DateTime.now(),
-      ));
+      conv.messages.add(userMsg);
+      conv.updatedAt = DateTime.now();
+      if (conv.title == 'New Conversation' || conv.title.isEmpty) {
+        conv.title = text.length > 40 ? '${text.substring(0, 37)}...' : text;
+      }
       _isLoading = true;
     });
 
+    widget.api.saveLocalConversations(_conversations);
     _scrollToBottom();
 
     try {
@@ -101,26 +210,40 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
         buf.writeln('Instruction: $text');
         prompt = buf.toString();
       }
-      final plan = await widget.api.plan(prompt, const []);
+
+      final plan = await widget.api.plan(
+        prompt,
+        const [],
+        conversationId: conv.id.startsWith('conv-') ? null : conv.id,
+      );
+
       if (!mounted) return;
 
+      final asstMsg = ChatMessage(
+        text: plan.reply ?? 'Plan prepared for your review:',
+        isUser: false,
+        time: DateTime.now(),
+        plan: plan,
+      );
+
       setState(() {
-        _messages.add(ChatMessage(
-          text: plan.reply ?? 'Plan prepared for your review:',
-          isUser: false,
-          time: DateTime.now(),
-          plan: plan,
-        ));
+        conv.messages.add(asstMsg);
+        conv.updatedAt = DateTime.now();
       });
+
+      widget.api.saveLocalConversations(_conversations);
     } catch (e) {
       if (!mounted) return;
+      final errorMsg = ChatMessage(
+        text: 'Notice: $e',
+        isUser: false,
+        time: DateTime.now(),
+      );
       setState(() {
-        _messages.add(ChatMessage(
-          text: 'Notice: $e',
-          isUser: false,
-          time: DateTime.now(),
-        ));
+        conv.messages.add(errorMsg);
+        conv.updatedAt = DateTime.now();
       });
+      widget.api.saveLocalConversations(_conversations);
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
@@ -265,8 +388,29 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
                             ],
                           ),
                         ),
+                        // Chat History Action Button
                         IconButton(
-                          icon: const Icon(Icons.more_horiz),
+                          icon: Badge(
+                            isLabelVisible: _conversations.length > 1,
+                            label: Text('${_conversations.length}'),
+                            backgroundColor: const Color(0xFF6046E8),
+                            child: const Icon(Icons.history_rounded),
+                          ),
+                          tooltip: 'Chat History',
+                          color: isDark ? Colors.white70 : const Color(0xFF4B5563),
+                          onPressed: _showChatHistorySheet,
+                        ),
+                        // New Chat Button
+                        IconButton(
+                          icon: const Icon(Icons.add_comment_outlined),
+                          tooltip: 'New Chat',
+                          color: isDark ? Colors.white70 : const Color(0xFF4B5563),
+                          onPressed: () => _startNewChat(),
+                        ),
+                        // Folder Options
+                        IconButton(
+                          icon: const Icon(Icons.folder_shared_outlined),
+                          tooltip: 'Select Folder',
                           color: isDark ? Colors.white60 : Colors.black45,
                           onPressed: () => showDeviceFolderPicker(context, widget.fileService),
                         ),
@@ -344,6 +488,94 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
                                 fontSize: 11,
                                 fontWeight: FontWeight.w700,
                               ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+
+                // Active Conversation Bar (tappable to view chat history)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 2, 20, 4),
+                  child: InkWell(
+                    onTap: _showChatHistorySheet,
+                    borderRadius: BorderRadius.circular(14),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: isDark
+                            ? const Color(0xFF1E2235)
+                            : const Color(0xFFF1F3F9),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: outlineColor.withValues(alpha: 0.5),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(5),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF6046E8).withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Icon(
+                              Icons.forum_outlined,
+                              size: 16,
+                              color: Color(0xFF6046E8),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _activeConversation?.title ?? 'Conversation',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                    color: isDark ? Colors.white : const Color(0xFF1E1B38),
+                                  ),
+                                ),
+                                Text(
+                                  '${_activeConversation?.messages.length ?? 0} messages · ${_activeConversation?.formattedDate ?? "Today"}',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: isDark ? Colors.white60 : const Color(0xFF6B7280),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF6046E8).withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  'History',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF6046E8),
+                                  ),
+                                ),
+                                SizedBox(width: 2),
+                                Icon(
+                                  Icons.chevron_right,
+                                  size: 14,
+                                  color: Color(0xFF6046E8),
+                                ),
+                              ],
                             ),
                           ),
                         ],
@@ -587,12 +819,15 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
 
               const SizedBox(height: 14),
 
-              // Interactive action buttons: [Confirm] [Edit step] [Skip step 3]
-              Row(
+              // Interactive action buttons: [Confirm & Run] [Review details]
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
                 children: [
-                  // Confirm button
-                  FilledButton(
+                  FilledButton.icon(
                     onPressed: () => _showConfirmationSheet(plan),
+                    icon: const Icon(Icons.play_arrow_rounded, size: 16),
+                    label: const Text('Confirm & Run'),
                     style: FilledButton.styleFrom(
                       backgroundColor: const Color(0xFF6046E8),
                       shape: RoundedRectangleBorder(
@@ -602,24 +837,16 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
                         horizontal: 16,
                         vertical: 10,
                       ),
-                    ),
-                    child: const Text(
-                      'Confirm',
-                      style: TextStyle(
+                      textStyle: const TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
                   ),
-                  const SizedBox(width: 8),
-
-                  // Edit step button
-                  OutlinedButton(
-                    onPressed: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Edit step opened')),
-                      );
-                    },
+                  OutlinedButton.icon(
+                    onPressed: () => _showConfirmationSheet(plan),
+                    icon: const Icon(Icons.tune_rounded, size: 15),
+                    label: const Text('Review details'),
                     style: OutlinedButton.styleFrom(
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(14),
@@ -628,39 +855,12 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
                         horizontal: 14,
                         vertical: 10,
                       ),
-                    ),
-                    child: Text(
-                      'Edit step',
-                      style: TextStyle(
+                      textStyle: const TextStyle(
                         fontSize: 13,
-                        color: isDark ? Colors.white70 : const Color(0xFF4B5563),
+                        fontWeight: FontWeight.w600,
                       ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-
-                  // Skip step button
-                  OutlinedButton(
-                    onPressed: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Step 3 skipped.')),
-                      );
-                    },
-                    style: OutlinedButton.styleFrom(
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 10,
-                      ),
-                    ),
-                    child: Text(
-                      'Skip step 3',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: isDark ? Colors.white70 : const Color(0xFF4B5563),
-                      ),
+                      foregroundColor:
+                          isDark ? Colors.white70 : const Color(0xFF4B5563),
                     ),
                   ),
                 ],
@@ -756,72 +956,19 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
       backgroundColor: Colors.transparent,
       builder: (ctx) => _ConfirmationSheetModal(
         plan: plan,
+        fileService: widget.fileService,
         onRunPlan: () async {
           Navigator.pop(ctx);
-          int executedCount = 0;
-          for (final op in plan.operations) {
-            try {
-              switch (op.name) {
-                case 'move_file':
-                  final src = op.input['sourcePath'] as String? ?? op.input['path'] as String?;
-                  final dst = op.input['destinationPath'] as String? ?? op.input['destination'] as String?;
-                  if (src != null && dst != null) {
-                    await widget.fileService.move(src, dst);
-                    executedCount++;
-                  }
-                  break;
-                case 'create_folder':
-                  final path = op.input['path'] as String? ?? op.input['name'] as String?;
-                  if (path != null) {
-                    await widget.fileService.createFolder('.', path);
-                    executedCount++;
-                  }
-                  break;
-                case 'create_file':
-                  final path = op.input['path'] as String? ?? op.input['name'] as String?;
-                  final content = op.input['content'] as String? ?? '';
-                  if (path != null) {
-                    await widget.fileService.createFile(path, content);
-                    executedCount++;
-                  }
-                  break;
-                case 'rename_file':
-                  final path = op.input['path'] as String?;
-                  final newName = op.input['newName'] as String?;
-                  if (path != null && newName != null) {
-                    await widget.fileService.rename(path, newName);
-                    executedCount++;
-                  }
-                  break;
-                case 'delete_file':
-                case 'delete_item':
-                  final path = op.input['path'] as String?;
-                  if (path != null) {
-                    await widget.fileService.delete(path);
-                    executedCount++;
-                  }
-                  break;
-                case 'edit_file':
-                  final path = op.input['path'] as String?;
-                  final content = op.input['content'] as String? ?? '';
-                  if (path != null) {
-                    await widget.fileService.editFile(path, content);
-                    executedCount++;
-                  }
-                  break;
-                case 'organize_files':
-                  final src = op.input['sourceDirectory'] as String? ?? '.';
-                  final strategy = op.input['strategy'] as String? ?? 'by_type';
-                  await widget.fileService.organizeFiles(src, strategy);
-                  executedCount++;
-                  break;
-              }
-            } catch (e) {
-              debugPrint('Error executing operation ${op.name}: $e');
-            }
-          }
+          if (!mounted) return;
 
-          await widget.fileService.refresh();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Executing ${plan.operations.length} file operations on your device...'),
+              duration: const Duration(seconds: 2),
+            ),
+          );
+
+          final executedCount = await widget.fileService.executePlan(plan);
 
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
@@ -833,14 +980,44 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
               ),
             );
             setState(() {
-              _messages.add(ChatMessage(
+              final confirmationMsg = ChatMessage(
                 text: 'Plan executed successfully! $executedCount file operations completed on your device.',
                 isUser: false,
                 time: DateTime.now(),
-              ));
+              );
+              _activeConversation?.messages.add(confirmationMsg);
+              _activeConversation?.updatedAt = DateTime.now();
             });
+            widget.api.saveLocalConversations(_conversations);
             _scrollToBottom();
           }
+        },
+      ),
+    );
+  }
+
+  void _showChatHistorySheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _ChatHistoryModal(
+        conversations: _conversations,
+        activeConversationId: _activeConversation?.id,
+        onSelectConversation: (conv) {
+          Navigator.pop(ctx);
+          _selectConversation(conv);
+        },
+        onNewChat: () {
+          Navigator.pop(ctx);
+          _startNewChat();
+        },
+        onDeleteConversation: (conv) {
+          _deleteConversation(conv);
+        },
+        onClearAll: () {
+          Navigator.pop(ctx);
+          _clearAllConversations();
         },
       ),
     );
@@ -922,10 +1099,12 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
 class _ConfirmationSheetModal extends StatefulWidget {
   const _ConfirmationSheetModal({
     required this.plan,
+    required this.fileService,
     required this.onRunPlan,
   });
 
   final AiPlan plan;
+  final LocalFileService fileService;
   final VoidCallback onRunPlan;
 
   @override
@@ -938,11 +1117,147 @@ class _ConfirmationSheetModalState extends State<_ConfirmationSheetModal> {
   bool _allowUndo = true;
   bool _notifyWhenDone = false;
 
+  String _computeAffectedLabel() {
+    final count = widget.plan.affectedCount > 0
+        ? widget.plan.affectedCount
+        : (widget.plan.operations.isNotEmpty
+            ? widget.plan.operations.length
+            : widget.fileService.files.length);
+
+    final names = <String>[];
+    for (final op in widget.plan.operations) {
+      final n = op.input['newName']?.toString() ??
+          op.input['path']?.toString() ??
+          op.input['sourcePath']?.toString() ??
+          '';
+      if (n.isNotEmpty) names.add(n.split('/').last);
+    }
+    if (names.isEmpty && widget.fileService.files.isNotEmpty) {
+      names.addAll(widget.fileService.files.map((f) => f.name));
+    }
+
+    final extensions = names
+        .map((name) {
+          final dot = name.lastIndexOf('.');
+          return dot != -1 ? name.substring(dot + 1).toLowerCase() : '';
+        })
+        .where((e) => e.isNotEmpty)
+        .toSet();
+
+    const imageExts = {'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'heic'};
+    const docExts = {'doc', 'docx', 'txt', 'xls', 'xlsx', 'ppt', 'pptx'};
+
+    if (extensions.isNotEmpty && extensions.every((e) => imageExts.contains(e))) {
+      return '$count Images';
+    } else if (extensions.length == 1 && extensions.first == 'pdf') {
+      return '$count PDFs';
+    } else if (extensions.isNotEmpty &&
+        extensions.every((e) => docExts.contains(e) || e == 'pdf')) {
+      return '$count Documents';
+    }
+    return '$count Files';
+  }
+
+  String _computeSource() {
+    if (widget.plan.sourcePath != null && widget.plan.sourcePath!.isNotEmpty) {
+      return widget.plan.sourcePath!;
+    }
+    final folder = widget.fileService.authorizedFolderName;
+    return folder.isNotEmpty ? folder : 'Device Storage';
+  }
+
+  String _computeDestination() {
+    if (widget.plan.destinationPath != null &&
+        widget.plan.destinationPath!.isNotEmpty) {
+      return widget.plan.destinationPath!;
+    }
+    final isRename =
+        widget.plan.operations.any((op) => op.name == 'rename_file');
+    if (isRename) {
+      if (widget.plan.operations.isNotEmpty) {
+        final first = widget.plan.operations.first.input['newName']?.toString();
+        final last = widget.plan.operations.last.input['newName']?.toString();
+        if (first != null && last != null && first != last) {
+          return '$first ... $last';
+        } else if (first != null) {
+          return first;
+        }
+      }
+      return 'In-place Rename';
+    }
+    return _computeSource();
+  }
+
+  List<Widget> _buildPreviewChips(bool isDark, Color outlineColor) {
+    final chips = <Widget>[];
+    final previewItems = <({String name, String ext})>[];
+
+    for (final op in widget.plan.operations) {
+      final rawName = op.input['newName']?.toString() ??
+          op.input['path']?.toString() ??
+          op.input['sourcePath']?.toString() ??
+          '';
+      final name = rawName.split('/').last;
+      if (name.isNotEmpty) {
+        final dot = name.lastIndexOf('.');
+        final ext =
+            dot != -1 ? name.substring(dot + 1).toUpperCase() : 'FILE';
+        previewItems.add((name: name, ext: ext));
+      }
+    }
+
+    if (previewItems.isEmpty) {
+      for (final f in widget.fileService.files) {
+        final dot = f.name.lastIndexOf('.');
+        final ext =
+            dot != -1 ? f.name.substring(dot + 1).toUpperCase() : 'FILE';
+        previewItems.add((name: f.name, ext: ext));
+      }
+    }
+
+    final displayItems = previewItems.take(2).toList();
+    for (final item in displayItems) {
+      chips.add(_buildPreviewChip(item.name, item.ext, isDark, outlineColor));
+    }
+
+    final remaining = previewItems.length - displayItems.length;
+    if (remaining > 0) {
+      chips.add(
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF22283A) : const Color(0xFFEFF2F8),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Text(
+            '+$remaining',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: isDark ? Colors.white70 : const Color(0xFF4B5563),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return chips;
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final cardColor = Theme.of(context).cardColor;
     final outlineColor = Theme.of(context).colorScheme.outline;
+
+    final totalAffected = widget.plan.affectedCount > 0
+        ? widget.plan.affectedCount
+        : (widget.plan.operations.isNotEmpty
+            ? widget.plan.operations.length
+            : widget.fileService.files.length);
+    final isMoveOrCopy = widget.plan.operations.any(
+      (op) => op.name == 'move_file' || op.name == 'copy_file',
+    );
 
     return Container(
       decoration: BoxDecoration(
@@ -984,48 +1299,31 @@ class _ConfirmationSheetModalState extends State<_ConfirmationSheetModal> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 // Metric Key-Value pairs
-                _buildMetricRow('Files affected', '${widget.plan.affectedCount} PDFs', isDark),
+                _buildMetricRow('Files affected', _computeAffectedLabel(), isDark),
                 const SizedBox(height: 12),
-                _buildMetricRow('Source', widget.plan.sourcePath ?? '/Downloads', isDark),
+                _buildMetricRow('Source', _computeSource(), isDark),
                 const SizedBox(height: 12),
-                _buildMetricRow('Destination', widget.plan.destinationPath ?? '/Documents', isDark),
+                _buildMetricRow('Destination', _computeDestination(), isDark),
                 const SizedBox(height: 12),
                 _buildMetricRow('Estimated time', '~${widget.plan.estimatedSeconds} seconds', isDark),
                 const SizedBox(height: 18),
 
-                // File badges preview: [PDF Invoice-Mar.pdf] [PDF Contract.pdf] [+12]
+                // File badges preview
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,
-                  children: [
-                    _buildPreviewChip('Invoice-Mar.pdf', isDark, outlineColor),
-                    _buildPreviewChip('Contract.pdf', isDark, outlineColor),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: isDark ? const Color(0xFF22283A) : const Color(0xFFEFF2F8),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text(
-                        '+12',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          color: isDark ? Colors.white70 : const Color(0xFF4B5563),
-                        ),
-                      ),
-                    ),
-                  ],
+                  children: _buildPreviewChips(isDark, outlineColor),
                 ),
                 const SizedBox(height: 20),
 
                 // Safety Switches
-                _buildSwitchRow(
-                  'Move originals to Trash after copy',
-                  _moveToTrash,
-                  (val) => setState(() => _moveToTrash = val),
-                  isDark,
-                ),
+                if (isMoveOrCopy)
+                  _buildSwitchRow(
+                    'Move originals to Trash after copy',
+                    _moveToTrash,
+                    (val) => setState(() => _moveToTrash = val),
+                    isDark,
+                  ),
                 _buildSwitchRow(
                   'Allow undo for 24h',
                   _allowUndo,
@@ -1087,7 +1385,7 @@ class _ConfirmationSheetModalState extends State<_ConfirmationSheetModal> {
                 ),
                 const SizedBox(height: 12),
 
-                // Big prominent green button: [Run plan (14 files)]
+                // Big prominent green button
                 FilledButton(
                   onPressed: widget.onRunPlan,
                   style: FilledButton.styleFrom(
@@ -1098,7 +1396,7 @@ class _ConfirmationSheetModalState extends State<_ConfirmationSheetModal> {
                     padding: const EdgeInsets.symmetric(vertical: 16),
                   ),
                   child: Text(
-                    'Run plan (${widget.plan.affectedCount} files)',
+                    'Run plan ($totalAffected files)',
                     style: const TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w700,
@@ -1137,7 +1435,29 @@ class _ConfirmationSheetModalState extends State<_ConfirmationSheetModal> {
     );
   }
 
-  Widget _buildPreviewChip(String filename, bool isDark, Color outlineColor) {
+  Widget _buildPreviewChip(
+    String filename,
+    String badgeText,
+    bool isDark,
+    Color outlineColor,
+  ) {
+    Color badgeBgColor;
+    final extUpper = badgeText.toUpperCase();
+    if (extUpper == 'PDF') {
+      badgeBgColor = const Color(0xFFEF4444);
+    } else if (['JPG', 'JPEG', 'PNG', 'WEBP', 'GIF', 'HEIC']
+        .contains(extUpper)) {
+      badgeBgColor = const Color(0xFF0EA5E9);
+    } else if (['MP4', 'MOV', 'MKV', 'AVI'].contains(extUpper)) {
+      badgeBgColor = const Color(0xFF8B5CF6);
+    } else if (['MP3', 'WAV', 'AAC', 'FLAC'].contains(extUpper)) {
+      badgeBgColor = const Color(0xFFEC4899);
+    } else if (['DOC', 'DOCX', 'TXT', 'MD'].contains(extUpper)) {
+      badgeBgColor = const Color(0xFF3B82F6);
+    } else {
+      badgeBgColor = const Color(0xFF6B7280);
+    }
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
@@ -1149,14 +1469,14 @@ class _ConfirmationSheetModalState extends State<_ConfirmationSheetModal> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
             decoration: BoxDecoration(
-              color: const Color(0xFFEF4444),
+              color: badgeBgColor,
               borderRadius: BorderRadius.circular(4),
             ),
-            child: const Text(
-              'PDF',
-              style: TextStyle(
+            child: Text(
+              badgeText,
+              style: const TextStyle(
                 color: Colors.white,
                 fontSize: 9,
                 fontWeight: FontWeight.w800,
@@ -1164,12 +1484,17 @@ class _ConfirmationSheetModalState extends State<_ConfirmationSheetModal> {
             ),
           ),
           const SizedBox(width: 6),
-          Text(
-            filename,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: isDark ? Colors.white : const Color(0xFF1F2937),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 140),
+            child: Text(
+              filename,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: isDark ? Colors.white : const Color(0xFF1F2937),
+              ),
             ),
           ),
         ],
@@ -1201,6 +1526,391 @@ class _ConfirmationSheetModalState extends State<_ConfirmationSheetModal> {
             activeThumbColor: const Color(0xFF6046E8),
             onChanged: onChanged,
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ChatHistoryModal extends StatefulWidget {
+  const _ChatHistoryModal({
+    required this.conversations,
+    required this.activeConversationId,
+    required this.onSelectConversation,
+    required this.onNewChat,
+    required this.onDeleteConversation,
+    required this.onClearAll,
+  });
+
+  final List<ChatConversation> conversations;
+  final String? activeConversationId;
+  final ValueChanged<ChatConversation> onSelectConversation;
+  final VoidCallback onNewChat;
+  final ValueChanged<ChatConversation> onDeleteConversation;
+  final VoidCallback onClearAll;
+
+  @override
+  State<_ChatHistoryModal> createState() => _ChatHistoryModalState();
+}
+
+class _ChatHistoryModalState extends State<_ChatHistoryModal> {
+  final _searchController = TextEditingController();
+  String _filter = '';
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final cardColor = Theme.of(context).cardColor;
+    final outlineColor = Theme.of(context).colorScheme.outline;
+
+    final filtered = widget.conversations.where((c) {
+      if (_filter.isEmpty) return true;
+      final q = _filter.toLowerCase();
+      return c.title.toLowerCase().contains(q) ||
+          c.messages.any((m) => m.text.toLowerCase().contains(q));
+    }).toList();
+
+    return Container(
+      height: MediaQuery.sizeOf(context).height * 0.75,
+      decoration: BoxDecoration(
+        color: cardColor,
+        borderRadius: const BorderRadius.only(
+          topLeft: Radius.circular(24),
+          topRight: Radius.circular(24),
+        ),
+      ),
+      child: Column(
+        children: [
+          // Drag handle
+          Container(
+            margin: const EdgeInsets.only(top: 12, bottom: 8),
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: isDark ? Colors.white24 : Colors.black12,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+
+          // Header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+            child: Row(
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF6046E8).withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(
+                    Icons.history_rounded,
+                    color: Color(0xFF6046E8),
+                    size: 20,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Chat History',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      Text(
+                        '${widget.conversations.length} saved conversation${widget.conversations.length == 1 ? '' : 's'}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: isDark ? Colors.white60 : const Color(0xFF6B7280),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                FilledButton.icon(
+                  onPressed: widget.onNewChat,
+                  icon: const Icon(Icons.add, size: 16),
+                  label: const Text('New Chat'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF6046E8),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // Search bar
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF1E2235) : const Color(0xFFF1F3F9),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: TextField(
+                controller: _searchController,
+                onChanged: (val) => setState(() => _filter = val.trim()),
+                decoration: const InputDecoration(
+                  icon: Icon(Icons.search, size: 20),
+                  hintText: 'Search chat history...',
+                  border: InputBorder.none,
+                  isDense: true,
+                  contentPadding: EdgeInsets.symmetric(vertical: 10),
+                ),
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 8),
+          const Divider(height: 1),
+
+          // Conversations List
+          Expanded(
+            child: filtered.isEmpty
+                ? Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.forum_outlined,
+                          size: 48,
+                          color: isDark ? Colors.white24 : Colors.black12,
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          _filter.isNotEmpty
+                              ? 'No matching conversations found'
+                              : 'No chat history yet',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: isDark ? Colors.white60 : const Color(0xFF6B7280),
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                : ListView.separated(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    itemCount: filtered.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 6),
+                    itemBuilder: (context, index) {
+                      final conv = filtered[index];
+                      final isActive = conv.id == widget.activeConversationId;
+
+                      return Container(
+                        decoration: BoxDecoration(
+                          color: isActive
+                              ? const Color(0xFF6046E8).withValues(alpha: isDark ? 0.16 : 0.08)
+                              : (isDark ? const Color(0xFF1A1F30) : const Color(0xFFFAFAFD)),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: isActive
+                                ? const Color(0xFF6046E8)
+                                : outlineColor.withValues(alpha: 0.4),
+                            width: isActive ? 1.5 : 1.0,
+                          ),
+                        ),
+                        child: ListTile(
+                          contentPadding:
+                              const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                          leading: Container(
+                            width: 38,
+                            height: 38,
+                            decoration: BoxDecoration(
+                              color: isActive
+                                  ? const Color(0xFF6046E8)
+                                  : (isDark
+                                      ? const Color(0xFF262E44)
+                                      : const Color(0xFFECEFF8)),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Icon(
+                              Icons.chat_bubble_outline_rounded,
+                              size: 18,
+                              color: isActive
+                                  ? Colors.white
+                                  : (isDark ? Colors.white70 : const Color(0xFF6046E8)),
+                            ),
+                          ),
+                          title: Text(
+                            conv.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: isActive ? FontWeight.w700 : FontWeight.w600,
+                              color: isDark ? Colors.white : const Color(0xFF111827),
+                            ),
+                          ),
+                          subtitle: Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  conv.snippet,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: isDark ? Colors.white60 : const Color(0xFF6B7280),
+                                  ),
+                                ),
+                                const SizedBox(height: 3),
+                                Row(
+                                  children: [
+                                    Text(
+                                      conv.formattedDate,
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: isDark ? Colors.white38 : const Color(0xFF9CA3AF),
+                                      ),
+                                    ),
+                                    const Text(' · ', style: TextStyle(color: Colors.grey)),
+                                    Text(
+                                      '${conv.messages.length} msg${conv.messages.length == 1 ? '' : 's'}',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: isDark ? Colors.white38 : const Color(0xFF9CA3AF),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (isActive)
+                                Container(
+                                  margin: const EdgeInsets.only(right: 6),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF10B981).withValues(alpha: 0.15),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: const Text(
+                                    'Active',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700,
+                                      color: Color(0xFF10B981),
+                                    ),
+                                  ),
+                                ),
+                              IconButton(
+                                icon: const Icon(Icons.delete_outline, size: 18),
+                                color: isDark ? Colors.white38 : const Color(0xFF9CA3AF),
+                                tooltip: 'Delete conversation',
+                                onPressed: () {
+                                  showDialog(
+                                    context: context,
+                                    builder: (dlgCtx) => AlertDialog(
+                                      title: const Text('Delete conversation?'),
+                                      content: Text('Delete "${conv.title}"? This cannot be undone.'),
+                                      actions: [
+                                        TextButton(
+                                          onPressed: () => Navigator.pop(dlgCtx),
+                                          child: const Text('Cancel'),
+                                        ),
+                                        FilledButton(
+                                          style: FilledButton.styleFrom(
+                                            backgroundColor: const Color(0xFFEF4444),
+                                          ),
+                                          onPressed: () {
+                                            Navigator.pop(dlgCtx);
+                                            setState(() {
+                                              widget.onDeleteConversation(conv);
+                                            });
+                                          },
+                                          child: const Text('Delete'),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                },
+                              ),
+                            ],
+                          ),
+                          onTap: () => widget.onSelectConversation(conv),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+
+          // Bottom clear all button
+          if (widget.conversations.isNotEmpty)
+            SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    TextButton.icon(
+                      onPressed: () {
+                        showDialog(
+                          context: context,
+                          builder: (dlgCtx) => AlertDialog(
+                            title: const Text('Clear all chat history?'),
+                            content: const Text(
+                                'This will delete all conversations from your device and server.'),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(dlgCtx),
+                                child: const Text('Cancel'),
+                              ),
+                              FilledButton(
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: const Color(0xFFEF4444),
+                                ),
+                                onPressed: () {
+                                  Navigator.pop(dlgCtx);
+                                  widget.onClearAll();
+                                },
+                                child: const Text('Clear All'),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.delete_sweep_outlined,
+                          size: 18, color: Color(0xFFEF4444)),
+                      label: const Text(
+                        'Clear all history',
+                        style: TextStyle(
+                          color: Color(0xFFEF4444),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('Close'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
         ],
       ),
     );

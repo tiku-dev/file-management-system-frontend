@@ -52,6 +52,11 @@ class _AuthScreenState extends State<AuthScreen> {
     });
 
     try {
+      final customUrl = _serverUrlController.text.trim();
+      if (customUrl.isNotEmpty) {
+        widget.api.persistBaseUrl(customUrl);
+      }
+
       final email = _emailController.text.trim();
       final password = _passwordController.text;
 
@@ -493,19 +498,21 @@ class _AuthScreenState extends State<AuthScreen> {
                             runSpacing: 6,
                             children: [
                               ActionChip(
-                                label: const Text('127.0.0.1:8000 (ADB/USB)',
+                                label: const Text('127.0.0.1:8000 (USB / ADB)',
                                     style: TextStyle(fontSize: 11)),
                                 onPressed: () {
                                   _serverUrlController.text =
                                       'http://127.0.0.1:8000';
+                                  widget.api.persistBaseUrl('http://127.0.0.1:8000');
                                 },
                               ),
                               ActionChip(
-                                label: const Text('192.168.100.228:8000 (Wi-Fi)',
+                                label: const Text('192.168.45.231:8000 (Wi-Fi)',
                                     style: TextStyle(fontSize: 11)),
                                 onPressed: () {
                                   _serverUrlController.text =
-                                      'http://192.168.100.228:8000';
+                                      'http://192.168.45.231:8000';
+                                  widget.api.persistBaseUrl('http://192.168.45.231:8000');
                                 },
                               ),
                               ActionChip(
@@ -514,6 +521,7 @@ class _AuthScreenState extends State<AuthScreen> {
                                 onPressed: () {
                                   _serverUrlController.text =
                                       'http://10.0.2.2:8000';
+                                  widget.api.persistBaseUrl('http://10.0.2.2:8000');
                                 },
                               ),
                             ],
@@ -526,20 +534,22 @@ class _AuthScreenState extends State<AuthScreen> {
                                   onPressed: () async {
                                     final testUrl =
                                         _serverUrlController.text.trim();
-                                    widget.api.baseUrl = testUrl;
-                                    final ok = await widget.api.checkHealth();
+                                    if (testUrl.isNotEmpty) {
+                                      widget.api.persistBaseUrl(testUrl);
+                                    }
+                                    final err = await widget.api.pingServer();
                                     if (context.mounted) {
                                       ScaffoldMessenger.of(context)
                                           .showSnackBar(
                                         SnackBar(
                                           content: Text(
-                                            ok
-                                                ? 'Connected! Backend is healthy.'
-                                                : 'Cannot reach $testUrl. Check that backend_drf is running and adb reverse tcp:8000 tcp:8000 was executed.',
+                                            err ??
+                                                'Connected! Backend is healthy at ${widget.api.baseUrl}',
                                           ),
-                                          backgroundColor: ok
+                                          backgroundColor: err == null
                                               ? const Color(0xFF10B981)
                                               : const Color(0xFFEF4444),
+                                          duration: const Duration(seconds: 4),
                                         ),
                                       );
                                     }
@@ -551,9 +561,11 @@ class _AuthScreenState extends State<AuthScreen> {
                               Expanded(
                                 child: FilledButton(
                                   onPressed: () {
+                                    final url = _serverUrlController.text.trim();
+                                    if (url.isNotEmpty) {
+                                      widget.api.persistBaseUrl(url);
+                                    }
                                     setState(() {
-                                      widget.api.baseUrl =
-                                          _serverUrlController.text.trim();
                                       _showServerConfig = false;
                                     });
                                     ScaffoldMessenger.of(context).showSnackBar(

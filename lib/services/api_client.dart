@@ -17,7 +17,47 @@ class ApiException implements Exception {
 
 class SmartFileApi {
   SmartFileApi({String? baseUrl})
-      : baseUrl = baseUrl ?? 'http://127.0.0.1:8000';
+      : baseUrl = baseUrl ?? 'http://127.0.0.1:8000' {
+    if (baseUrl == null) {
+      _loadPersistedBaseUrl();
+    }
+  }
+
+  static final List<String> _candidatePrefFiles = [
+    '/data/user/0/com.smartfile.app/files/smartfile_api_config.json',
+    '/data/user/0/com.smartfile.app/app_flutter/smartfile_api_config.json',
+    '${Directory.systemTemp.path}/smartfile_api_config.json',
+  ];
+
+  void _loadPersistedBaseUrl() {
+    for (final path in _candidatePrefFiles) {
+      try {
+        final f = File(path);
+        if (f.existsSync()) {
+          final data = jsonDecode(f.readAsStringSync());
+          if (data is Map &&
+              data['baseUrl'] is String &&
+              (data['baseUrl'] as String).isNotEmpty) {
+            baseUrl = data['baseUrl'] as String;
+            return;
+          }
+        }
+      } catch (_) {}
+    }
+  }
+
+  void persistBaseUrl(String url) {
+    baseUrl = url.trim();
+    for (final path in _candidatePrefFiles) {
+      try {
+        final f = File(path);
+        if (!f.parent.existsSync()) {
+          f.parent.createSync(recursive: true);
+        }
+        f.writeAsStringSync(jsonEncode({'baseUrl': baseUrl}));
+      } catch (_) {}
+    }
+  }
 
   String baseUrl;
   String? token;
@@ -31,6 +71,26 @@ class SmartFileApi {
 
   Uri _uri(String path) =>
       Uri.parse('${baseUrl.replaceAll(RegExp(r'/+$'), '')}$path');
+
+  Future<String?> pingServer() async {
+    try {
+      final response = await http
+          .get(_uri('/api/health'))
+          .timeout(const Duration(seconds: 4));
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        return null; // Successfully reached
+      }
+      return 'Server reached, but returned status ${response.statusCode}';
+    } on SocketException catch (e) {
+      return 'Cannot reach $baseUrl (${e.osError?.message ?? e.message}).\n'
+          '• If using USB: run "adb reverse tcp:8000 tcp:8000" on PC.\n'
+          '• If using Wi-Fi: use PC IP (http://192.168.45.231:8000).';
+    } on TimeoutException {
+      return 'Connection timed out to $baseUrl. Check PC firewall or IP address.';
+    } catch (e) {
+      return 'Connection failed: $e';
+    }
+  }
 
   Future<UserAccount> login({
     required String email,
@@ -131,19 +191,38 @@ class SmartFileApi {
 
   Future<AiPlan> plan(
     String instruction,
-    List<Map<String, dynamic>> results,
-  ) async {
+    List<Map<String, dynamic>> results, {
+    String? conversationId,
+  }) async {
     try {
-      final body = await _post('/api/mobile/plan', {
-        'instruction': instruction,
-        if (results.isNotEmpty) 'toolResults': results,
-      });
+      Map<String, dynamic> body;
+      if (token != null && !isDemoMode) {
+        try {
+          body = await _post('/api/ai/instructions', {
+            'instruction': instruction,
+            if (conversationId != null && conversationId.isNotEmpty)
+              'conversationId': conversationId,
+          });
+        } catch (_) {
+          body = await _post('/api/mobile/plan', {
+            'instruction': instruction,
+            if (results.isNotEmpty) 'toolResults': results,
+          });
+        }
+      } else {
+        body = await _post('/api/mobile/plan', {
+          'instruction': instruction,
+          if (results.isNotEmpty) 'toolResults': results,
+        });
+      }
+
       final rawOperations = body['operations'];
       if (rawOperations is List) {
         final ops = rawOperations.whereType<Map>().map((raw) {
           final map = Map<String, dynamic>.from(raw);
           return PlannedOperation(
-            id: map['id']?.toString() ?? 'op-${DateTime.now().millisecondsSinceEpoch}',
+            id: map['id']?.toString() ??
+                'op-${DateTime.now().millisecondsSinceEpoch}',
             name: map['name'] as String? ?? 'operation',
             input: Map<String, dynamic>.from(map['input'] as Map? ?? {}),
             requiresApproval: map['requiresApproval'] == true,
@@ -162,16 +241,41 @@ class SmartFileApi {
           ));
         }
 
+        String? src;
+        String? dst;
+        if (ops.isNotEmpty) {
+          final first = ops.first;
+          if (first.name == 'rename_file') {
+            src = first.input['path']?.toString();
+            final last = ops.last;
+            dst = '${first.input['newName']} ... ${last.input['newName']}';
+          } else if (first.name == 'move_file') {
+            src = first.input['sourcePath']?.toString() ??
+                first.input['path']?.toString();
+            dst = first.input['destinationPath']?.toString();
+          } else if (first.name == 'organize_files') {
+            src = first.input['sourceDirectory']?.toString() ?? 'Target folder';
+            dst = 'Category subfolders';
+          } else if (first.name == 'delete_file' || first.name == 'delete_item') {
+            src = first.input['path']?.toString();
+            dst = 'Permanent deletion';
+          }
+        }
+
         return AiPlan(
           reply: body['reply'] is String ? body['reply'] as String : null,
           operations: ops,
           steps: steps,
           affectedCount: ops.length,
-          sourcePath: '',
-          destinationPath: '',
+          sourcePath: src ?? '',
+          destinationPath: dst ?? '',
           estimatedSeconds: (ops.length * 0.5).ceil().clamp(1, 10),
+          conversationId: body['conversationId']?.toString() ?? conversationId,
           previewFiles: ops
-              .map((op) => op.input['newName']?.toString() ?? op.input['path']?.toString() ?? '')
+              .map((op) =>
+                  op.input['newName']?.toString() ??
+                  op.input['path']?.toString() ??
+                  '')
               .where((s) => s.isNotEmpty)
               .take(3)
               .toList(),
@@ -183,6 +287,194 @@ class SmartFileApi {
     }
 
     return _generateLocalPlan(instruction);
+  }
+
+  static final List<String> _candidateHistoryFiles = [
+    '/data/user/0/com.smartfile.app/files/smartfile_chat_conversations.json',
+    '/data/user/0/com.smartfile.app/app_flutter/smartfile_chat_conversations.json',
+    '${Directory.systemTemp.path}/smartfile_chat_conversations.json',
+  ];
+
+  List<ChatConversation> loadLocalConversations() {
+    for (final path in _candidateHistoryFiles) {
+      try {
+        final f = File(path);
+        if (f.existsSync()) {
+          final data = jsonDecode(f.readAsStringSync());
+          if (data is List) {
+            return data
+                .whereType<Map>()
+                .map((m) =>
+                    ChatConversation.fromJson(Map<String, dynamic>.from(m)))
+                .toList();
+          }
+        }
+      } catch (_) {}
+    }
+    return [];
+  }
+
+  void saveLocalConversations(List<ChatConversation> conversations) {
+    for (final path in _candidateHistoryFiles) {
+      try {
+        final f = File(path);
+        if (!f.parent.existsSync()) {
+          f.parent.createSync(recursive: true);
+        }
+        final raw = jsonEncode(conversations.map((c) => c.toJson()).toList());
+        f.writeAsStringSync(raw);
+      } catch (_) {}
+    }
+  }
+
+  Future<List<ChatConversation>> fetchRemoteConversations() async {
+    if (isDemoMode || token == null) return [];
+    try {
+      final response = await http
+          .get(_uri('/api/ai/conversations'), headers: _headers)
+          .timeout(const Duration(seconds: 10));
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is List) {
+          final list = <ChatConversation>[];
+          for (final item in decoded) {
+            if (item is Map) {
+              list.add(ChatConversation(
+                id: item['id']?.toString() ?? '',
+                title: item['title']?.toString() ?? 'Conversation',
+                createdAt: DateTime.tryParse(item['createdAt']?.toString() ?? '') ??
+                    DateTime.now(),
+                updatedAt: DateTime.tryParse(item['updatedAt']?.toString() ?? '') ??
+                    DateTime.now(),
+              ));
+            }
+          }
+          return list;
+        }
+      }
+      return [];
+    } catch (e) {
+      debugPrint('fetchRemoteConversations failed: $e');
+      return [];
+    }
+  }
+
+  Future<ChatConversation?> fetchRemoteConversationDetail(
+      String conversationId) async {
+    if (isDemoMode || token == null) return null;
+    try {
+      final body = await _get('/api/ai/conversations/$conversationId');
+      final rawMessages = body['messages'] as List? ?? [];
+      final msgs = <ChatMessage>[];
+
+      for (final m in rawMessages) {
+        if (m is! Map) continue;
+        final role = m['role']?.toString();
+        final content = m['content']?.toString() ?? '';
+        final isUser = role == 'user';
+        final time =
+            DateTime.tryParse(m['createdAt']?.toString() ?? '') ?? DateTime.now();
+
+        AiPlan? plan;
+        final rawToolCalls = m['toolCalls'] as List? ?? [];
+        if (rawToolCalls.isNotEmpty) {
+          final ops = rawToolCalls.whereType<Map>().map((raw) {
+            final map = Map<String, dynamic>.from(raw);
+            return PlannedOperation(
+              id: map['id']?.toString() ??
+                  'op-${DateTime.now().millisecondsSinceEpoch}',
+              name: map['name'] as String? ?? 'operation',
+              input: Map<String, dynamic>.from(map['input'] as Map? ?? {}),
+              requiresApproval: map['requiresApproval'] == true,
+            );
+          }).toList();
+
+          final steps = <AiPlanStep>[];
+          for (var i = 0; i < ops.length; i++) {
+            final op = ops[i];
+            steps.add(AiPlanStep(
+              stepNumber: i + 1,
+              title: op.summary,
+              description: op.name,
+              badgeText: 'Step ${i + 1}',
+              isDestructive: op.requiresApproval,
+            ));
+          }
+
+          String? src;
+          String? dst;
+          if (ops.isNotEmpty) {
+            final first = ops.first;
+            if (first.name == 'rename_file') {
+              src = first.input['path']?.toString();
+              final last = ops.last;
+              dst = '${first.input['newName']} ... ${last.input['newName']}';
+            } else if (first.name == 'move_file') {
+              src = first.input['sourcePath']?.toString() ??
+                  first.input['path']?.toString();
+              dst = first.input['destinationPath']?.toString();
+            } else if (first.name == 'organize_files') {
+              src = first.input['sourceDirectory']?.toString() ?? 'Target folder';
+              dst = 'Category subfolders';
+            } else if (first.name == 'delete_file' || first.name == 'delete_item') {
+              src = first.input['path']?.toString();
+              dst = 'Permanent deletion';
+            }
+          }
+
+          plan = AiPlan(
+            reply: content,
+            operations: ops,
+            steps: steps,
+            affectedCount: ops.length,
+            sourcePath: src ?? '',
+            destinationPath: dst ?? '',
+            estimatedSeconds: (ops.length * 0.5).ceil().clamp(1, 10),
+            conversationId: conversationId,
+            previewFiles: ops
+                .map((op) =>
+                    op.input['newName']?.toString() ??
+                    op.input['path']?.toString() ??
+                    '')
+                .where((s) => s.isNotEmpty)
+                .take(3)
+                .toList(),
+          );
+        }
+
+        msgs.add(ChatMessage(
+          text: content,
+          isUser: isUser,
+          time: time,
+          plan: plan,
+        ));
+      }
+
+      return ChatConversation(
+        id: body['id']?.toString() ?? conversationId,
+        title: body['title']?.toString() ?? 'Conversation',
+        createdAt:
+            DateTime.tryParse(body['createdAt']?.toString() ?? '') ?? DateTime.now(),
+        updatedAt:
+            DateTime.tryParse(body['updatedAt']?.toString() ?? '') ?? DateTime.now(),
+        messages: msgs,
+      );
+    } catch (e) {
+      debugPrint('fetchRemoteConversationDetail failed: $e');
+      return null;
+    }
+  }
+
+  Future<bool> deleteRemoteConversation(String conversationId) async {
+    if (isDemoMode || token == null) return true;
+    try {
+      final response = await http
+          .delete(_uri('/api/ai/conversations/$conversationId'), headers: _headers)
+          .timeout(const Duration(seconds: 10));
+      return response.statusCode >= 200 && response.statusCode < 300;
+    } catch (_) {
+      return false;
+    }
   }
 
   AiPlan _generateLocalPlan(String instruction) {
@@ -309,9 +601,11 @@ class SmartFileApi {
         );
       }
       return body;
-    } on SocketException {
+    } on SocketException catch (e) {
       throw ApiException(
-        'Cannot reach backend at $baseUrl. If using USB, ensure adb reverse is running or use Wi-Fi IP.',
+        'Cannot reach backend at $baseUrl (${e.osError?.message ?? e.message}).\n'
+        '• If using USB: run "adb reverse tcp:8000 tcp:8000" on PC.\n'
+        '• If using Wi-Fi: set Server URL to http://192.168.45.231:8000',
       );
     } on http.ClientException {
       throw ApiException(
@@ -356,9 +650,11 @@ class SmartFileApi {
         );
       }
       return body;
-    } on SocketException {
+    } on SocketException catch (e) {
       throw ApiException(
-        'Cannot reach backend at $baseUrl. If using USB, ensure adb reverse is running or use Wi-Fi IP.',
+        'Cannot reach backend at $baseUrl (${e.osError?.message ?? e.message}).\n'
+        '• If using USB: run "adb reverse tcp:8000 tcp:8000" on PC.\n'
+        '• If using Wi-Fi: set Server URL to http://192.168.45.231:8000',
       );
     } on http.ClientException {
       throw ApiException(

@@ -465,12 +465,46 @@ class _SettingsScreenState extends State<SettingsScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Backend Server URL'),
-        content: TextField(
-          controller: controller,
-          decoration: const InputDecoration(
-            labelText: 'Server URL',
-            hintText: 'http://127.0.0.1:8000',
-          ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TextField(
+              controller: controller,
+              decoration: const InputDecoration(
+                labelText: 'Server URL',
+                hintText: 'http://127.0.0.1:8000',
+              ),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                ActionChip(
+                  label: const Text('127.0.0.1:8000 (USB)',
+                      style: TextStyle(fontSize: 11)),
+                  onPressed: () {
+                    controller.text = 'http://127.0.0.1:8000';
+                  },
+                ),
+                ActionChip(
+                  label: const Text('192.168.45.231:8000 (Wi-Fi)',
+                      style: TextStyle(fontSize: 11)),
+                  onPressed: () {
+                    controller.text = 'http://192.168.45.231:8000';
+                  },
+                ),
+                ActionChip(
+                  label: const Text('10.0.2.2:8000 (Emulator)',
+                      style: TextStyle(fontSize: 11)),
+                  onPressed: () {
+                    controller.text = 'http://10.0.2.2:8000';
+                  },
+                ),
+              ],
+            ),
+          ],
         ),
         actions: [
           TextButton(
@@ -479,9 +513,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           FilledButton(
             onPressed: () {
-              setState(() {
-                widget.api.baseUrl = controller.text.trim();
-              });
+              final newUrl = controller.text.trim();
+              if (newUrl.isNotEmpty) {
+                widget.api.persistBaseUrl(newUrl);
+                setState(() {});
+              }
               Navigator.pop(ctx);
             },
             child: const Text('Save'),

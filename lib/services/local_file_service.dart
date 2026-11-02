@@ -75,6 +75,7 @@ class LocalFileService extends ChangeNotifier {
   bool get isScanning => _isScanning;
   List<FileEntry> get allEntries =>
       _useShowcase ? _showcaseEntries : List.unmodifiable(_cachedEntries);
+  List<FileEntry> get files => allEntries;
 
   void enableShowcaseMode() {
     _useShowcase = true;
@@ -870,18 +871,37 @@ class LocalFileService extends ChangeNotifier {
     }
   }
 
-  Future<void> rename(String itemPath, String newName) async {
-    final target = p.isAbsolute(itemPath) ? itemPath : p.join(_authorizedPath ?? '.', itemPath);
+  Future<void> rename(String itemPath, String newName, {bool rescan = true}) async {
+    final target = _resolvePath(itemPath);
     final dir = p.dirname(target);
     final destination = p.join(dir, newName.trim());
-    await move(target, destination);
+    await move(target, destination, rescan: rescan);
   }
 
-  Future<void> move(String sourcePath, String destinationPath) async {
-    final src = p.isAbsolute(sourcePath) ? sourcePath : p.join(_authorizedPath ?? '.', sourcePath);
+  String _resolvePath(String itemPath) {
+    if (p.isAbsolute(itemPath) && (File(itemPath).existsSync() || Directory(itemPath).existsSync())) {
+      return itemPath;
+    }
+    final direct = p.isAbsolute(itemPath) ? itemPath : p.join(_authorizedPath ?? '.', itemPath);
+    if (File(direct).existsSync() || Directory(direct).existsSync()) {
+      return direct;
+    }
+    // Search cached entries by filename
+    final base = p.basename(itemPath).toLowerCase();
+    for (final entry in _cachedEntries) {
+      if (entry.name.toLowerCase() == base || entry.path.toLowerCase().endsWith(base)) {
+        if (File(entry.path).existsSync() || Directory(entry.path).existsSync()) {
+          return entry.path;
+        }
+      }
+    }
+    return direct;
+  }
+
+  Future<void> move(String sourcePath, String destinationPath, {bool rescan = true}) async {
+    final src = _resolvePath(sourcePath);
     var dst = p.isAbsolute(destinationPath) ? destinationPath : p.join(_authorizedPath ?? '.', destinationPath);
 
-    // If destination is an existing directory, move file inside it
     if (await Directory(dst).exists()) {
       dst = p.join(dst, p.basename(src));
     }
@@ -892,12 +912,110 @@ class LocalFileService extends ChangeNotifier {
       if (!await dstParent.exists()) {
         await dstParent.create(recursive: true);
       }
-      await entity.rename(dst);
-      await scanDirectory();
+      try {
+        await entity.rename(dst);
+      } catch (_) {
+        // Fallback for Android cross-device or permission quirks
+        await entity.copy(dst);
+        await entity.delete();
+      }
+      if (rescan) await scanDirectory();
     } else if (await Directory(src).exists()) {
-      await Directory(src).rename(dst);
-      await scanDirectory();
+      try {
+        await Directory(src).rename(dst);
+      } catch (_) {}
+      if (rescan) await scanDirectory();
     }
+  }
+
+  Future<int> executePlan(AiPlan plan) async {
+    if (!isAuthorized) return 0;
+    int successCount = 0;
+
+    for (final op in plan.operations) {
+      try {
+        switch (op.name) {
+          case 'rename_file':
+            final path = op.input['path'] as String?;
+            final newName = op.input['newName'] as String?;
+            if (path != null && newName != null && newName.trim().isNotEmpty) {
+              await rename(path, newName.trim(), rescan: false);
+              successCount++;
+            }
+            break;
+          case 'move_file':
+            final src = op.input['sourcePath'] as String? ?? op.input['path'] as String?;
+            final dst = op.input['destinationPath'] as String? ?? op.input['destination'] as String?;
+            if (src != null && dst != null) {
+              await move(src, dst, rescan: false);
+              successCount++;
+            }
+            break;
+          case 'create_folder':
+            final path = op.input['path'] as String? ?? op.input['name'] as String?;
+            if (path != null) {
+              final target = p.isAbsolute(path) ? path : p.join(_authorizedPath ?? '.', path);
+              final dir = Directory(target);
+              if (!await dir.exists()) {
+                await dir.create(recursive: true);
+              }
+              successCount++;
+            }
+            break;
+          case 'create_file':
+            final path = op.input['path'] as String? ?? op.input['name'] as String?;
+            final content = op.input['content'] as String? ?? '';
+            if (path != null) {
+              final target = p.isAbsolute(path) ? path : p.join(_authorizedPath ?? '.', path);
+              final file = File(target);
+              if (!await file.parent.exists()) {
+                await file.parent.create(recursive: true);
+              }
+              await file.writeAsString(content);
+              successCount++;
+            }
+            break;
+          case 'delete_file':
+          case 'delete_item':
+            final path = op.input['path'] as String?;
+            if (path != null) {
+              final target = _resolvePath(path);
+              if (await File(target).exists()) {
+                await File(target).delete();
+                successCount++;
+              } else if (await Directory(target).exists()) {
+                await Directory(target).delete(recursive: true);
+                successCount++;
+              }
+            }
+            break;
+          case 'edit_file':
+            final path = op.input['path'] as String?;
+            final content = op.input['content'] as String? ?? '';
+            if (path != null) {
+              final target = _resolvePath(path);
+              final file = File(target);
+              if (await file.exists()) {
+                await file.writeAsString(content);
+                successCount++;
+              }
+            }
+            break;
+          case 'organize_files':
+            final src = op.input['sourceDirectory'] as String? ?? '.';
+            final strategy = op.input['strategy'] as String? ?? 'by_type';
+            await organizeFiles(src, strategy);
+            successCount++;
+            break;
+        }
+      } catch (e) {
+        debugPrint('Error executing operation ${op.name}: $e');
+      }
+    }
+
+    // Single directory scan after batch execution
+    await scanDirectory();
+    return successCount;
   }
 
   Future<int> moveMultiple(List<String> sourcePaths, String destinationDir) async {
